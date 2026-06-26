@@ -1,0 +1,117 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+.app{
+  --bg0:#0D1117;--bg1:#161B22;--bg2:#1C2128;--bg3:#22272E;--bg4:#2D333B;
+  --b1:#30363D;--b2:#444C56;
+  --t1:#CDD9E5;--t2:#768390;--t3:#444C56;
+  --blue:#539BF5;--bluebg:#1C2A3A;--bluebr:#2F6F9F;
+  --green:#57AB5A;--greenbg:#1B2A1F;--greenbr:#2D6A30;
+  --amber:#C69026;--amberbg:#2D2415;--amberbr:#6E4A00;
+  font-family:var(--font-sans);background:var(--bg0);
+  border:0.5px solid var(--b1);border-radius:10px;overflow:hidden;
+  display:flex;flex-direction:column;min-height:560px;
+}
+.titlebar{height:32px;background:var(--bg0);border-bottom:0.5px solid var(--b1);display:flex;align-items:center;padding:0 12px;gap:8px;flex-shrink:0}
+.dots{display:flex;gap:5px}
+.dot{width:10px;height:10px;border-radius:50%}
+.dr{background:#E24B4A}.dy{background:#EF9F27}.dg{background:#639922}
+.win-title{flex:1;text-align:center;font-size:12px;font-weight:500;color:var(--t2)}
+.body{display:flex;flex:1;overflow:hidden;min-height:0}
+.nav{width:172px;min-width:172px;background:var(--bg1);border-right:0.5px solid var(--b1);display:flex;flex-direction:column;padding:8px 0;overflow:hidden;flex-shrink:0}
+.nav-item{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:11px;color:var(--t2);cursor:pointer;position:relative}
+.nav-item:hover{background:var(--bg2);color:var(--t1)}
+.nav-item.active{background:var(--bg2);color:var(--t1);font-weight:500}
+.nav-item.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--blue)}
+.nav-item i{font-size:13px;width:14px;text-align:center}
+.nav-item.active i{color:var(--blue)}
+.content{flex:1;overflow:hidden;background:var(--bg1);padding:18px 22px;display:flex;flex-direction:column;gap:16px}
+.sec-title{font-size:14px;font-weight:500;color:var(--t1)}
+.sec-desc{font-size:11px;color:var(--t2);line-height:1.5;margin-top:2px}
+.sg{background:var(--bg2);border:0.5px solid var(--b1);border-radius:8px;overflow:hidden}
+.sg-hdr{padding:7px 14px 4px;font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;background:var(--bg2);border-bottom:0.5px solid var(--b1)}
+.sr{display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:0.5px solid var(--b1);min-height:40px}
+.sr:last-child{border-bottom:none}
+.sr-text{flex:1}
+.sr-label{font-size:11px;color:var(--t1);display:block;margin-bottom:1px}
+.sr-desc{font-size:10px;color:var(--t2);line-height:1.4}
+.toggle{width:36px;height:20px;border-radius:10px;background:var(--bg4);border:0.5px solid var(--b2);position:relative;flex-shrink:0}
+.toggle.on{background:#1F4E79;border-color:var(--blue)}
+.toggle::after{content:'';position:absolute;width:14px;height:14px;border-radius:50%;background:var(--t2);top:2px;left:2px;transition:left .15s}
+.toggle.on::after{left:18px;background:var(--blue)}
+.sel{border:0.5px solid var(--b2);border-radius:5px;background:var(--bg3);font-size:11px;color:var(--t1);padding:4px 22px 4px 8px;outline:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23768390' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 6px center;min-width:120px}
+.inp{border:0.5px solid var(--b2);border-radius:5px;background:var(--bg3);font-size:11px;color:var(--t1);padding:5px 8px;outline:none;font-family:var(--font-mono);width:200px}
+.slider-wrap{display:flex;align-items:center;gap:8px}
+.slider{-webkit-appearance:none;appearance:none;width:110px;height:4px;border-radius:2px;background:var(--bg4);outline:none}
+.slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--blue)}
+.slider-val{font-size:10px;color:var(--t2);min-width:32px;text-align:right;font-family:var(--font-mono)}
+.btn-sm{height:22px;padding:0 9px;border-radius:4px;font-size:10px;font-weight:500;display:flex;align-items:center;gap:4px;cursor:pointer;border:0.5px solid var(--b2);background:var(--bg3);color:var(--t2)}
+.btn-sm.blue{background:var(--bluebg);border-color:var(--bluebr);color:var(--blue)}
+.info-box{border-radius:5px;padding:6px 9px;display:flex;gap:7px;font-size:10px;line-height:1.5;border:0.5px solid}
+.ib-blue{background:var(--bluebg);border-color:var(--bluebr);color:var(--blue)}
+.ib-amber{background:var(--amberbg);border-color:var(--amberbr);color:var(--amber)}
+.footer-bar{border-top:0.5px solid var(--b1);padding:9px 22px;background:var(--bg0);display:flex;justify-content:flex-end;gap:6px;flex-shrink:0}
+</style>
+<div class="app">
+  <div class="titlebar">
+    <div class="dots"><div class="dot dr"></div><div class="dot dy"></div><div class="dot dg"></div></div>
+    <div class="win-title">Trunk — Preferences</div>
+  </div>
+  <div class="body">
+    <div class="nav">
+      <div class="nav-item active"><i class="ti ti-palette" aria-hidden="true"></i>Appearance</div>
+      <div class="nav-item"><i class="ti ti-user" aria-hidden="true"></i>Identity & signing</div>
+      <div class="nav-item"><i class="ti ti-git-branch" aria-hidden="true"></i>Git behaviour</div>
+      <div class="nav-item"><i class="ti ti-keyboard" aria-hidden="true"></i>Keyboard & input</div>
+      <div class="nav-item"><i class="ti ti-terminal" aria-hidden="true"></i>Terminal</div>
+      <div class="nav-item"><i class="ti ti-code" aria-hidden="true"></i>Diff & staging</div>
+      <div class="nav-item"><i class="ti ti-tag" aria-hidden="true"></i>Tag manager</div>
+      <div class="nav-item"><i class="ti ti-layout-grid" aria-hidden="true"></i>Workspace</div>
+      <div class="nav-item"><i class="ti ti-cloud" aria-hidden="true"></i>Network & credentials</div>
+      <div class="nav-item"><i class="ti ti-refresh" aria-hidden="true"></i>Updates</div>
+    </div>
+    <div class="content">
+      <div>
+        <div class="sec-title">Appearance</div>
+        <div class="sec-desc">Theme, layout density, and visual customisation.</div>
+      </div>
+      <div class="sg">
+        <div class="sg-hdr">Theme</div>
+        <div class="sr">
+          <div class="sr-text"><span class="sr-label">Colour theme</span><span class="sr-desc">Follow system automatically or override manually</span></div>
+          <select class="sel"><option selected>Dark</option><option>Light</option><option>Follow system</option></select>
+        </div>
+        <div class="sr" style="align-items:flex-start;padding-top:11px">
+          <div class="sr-text"><span class="sr-label">Custom theme file</span><span class="sr-desc">Override with a .css file. Hot-reloads on save.</span></div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+            <input class="inp" value="~/.config/trunk/themes/my-theme.css" style="width:190px">
+            <div style="display:flex;gap:5px"><div class="btn-sm"><i class="ti ti-folder" aria-hidden="true"></i>Browse</div><div class="btn-sm"><i class="ti ti-x" aria-hidden="true"></i>Clear</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="sg">
+        <div class="sg-hdr">Layout & density</div>
+        <div class="sr">
+          <div class="sr-text"><span class="sr-label">UI zoom scale</span><span class="sr-desc">Scales all interface elements. ⌘+ / ⌘− / ⌘0</span></div>
+          <div class="slider-wrap"><input type="range" class="slider" min="70" max="150" step="10" value="100"><span class="slider-val">100%</span></div>
+        </div>
+        <div class="sr">
+          <div class="sr-text"><span class="sr-label">Graph row height</span><span class="sr-desc">Height of each commit row in the graph</span></div>
+          <div class="slider-wrap"><input type="range" class="slider" min="22" max="36" step="2" value="28"><span class="slider-val">28px</span></div>
+        </div>
+        <div class="sr">
+          <div class="sr-text"><span class="sr-label">Font size</span><span class="sr-desc">Base font size for all UI text</span></div>
+          <select class="sel" style="min-width:80px"><option>11px</option><option selected>12px</option><option>13px</option><option>14px</option></select>
+        </div>
+      </div>
+      <div class="info-box ib-blue">
+        <i class="ti ti-info-circle" style="font-size:12px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i>
+        <div>Theme changes apply immediately. Other settings require clicking Save.</div>
+      </div>
+    </div>
+  </div>
+  <div class="footer-bar">
+    <div class="btn-sm">Cancel</div>
+    <div class="btn-sm blue"><i class="ti ti-check" aria-hidden="true"></i>Save</div>
+  </div>
+</div>

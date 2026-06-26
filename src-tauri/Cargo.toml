@@ -1,0 +1,21 @@
+[package]
+name = "trunk"
+version = "0.1.0"
+description = "Trunk — a fast, open-source Git GUI client"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+git2 = "0.19"
+portable-pty = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[[bin]]
+name = "trunk"
+path = "src/main.rs"

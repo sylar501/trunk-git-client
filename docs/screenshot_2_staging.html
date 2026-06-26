@@ -1,0 +1,191 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+.app{
+  --bg0:#0D1117;--bg1:#161B22;--bg2:#1C2128;--bg3:#22272E;--bg4:#2D333B;
+  --b1:#30363D;--b2:#444C56;
+  --t1:#CDD9E5;--t2:#768390;--t3:#444C56;
+  --blue:#539BF5;--bluebg:#1C2A3A;--bluebr:#2F6F9F;
+  --green:#57AB5A;--greenbg:#1B2A1F;--greenbr:#2D6A30;
+  --red:#E5534B;--redbg:#2D1B1B;--redbr:#6E2020;
+  --amber:#C69026;--amberbg:#2D2415;--amberbr:#6E4A00;
+  font-family:var(--font-sans);background:var(--bg0);
+  border:0.5px solid var(--b1);border-radius:10px;overflow:hidden;
+  display:flex;flex-direction:column;min-height:560px;
+}
+.titlebar{height:32px;background:var(--bg0);border-bottom:0.5px solid var(--b1);display:flex;align-items:center;padding:0 12px;gap:8px;flex-shrink:0}
+.dots{display:flex;gap:5px}
+.dot{width:10px;height:10px;border-radius:50%}
+.dr{background:#E24B4A}.dy{background:#EF9F27}.dg{background:#639922}
+.tl-title{flex:1;text-align:center;font-size:12px;font-weight:500;color:var(--t2)}
+.btn{height:22px;padding:0 9px;border-radius:5px;font-size:10px;font-weight:500;display:flex;align-items:center;gap:4px;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.btn i{font-size:12px}
+.btn-blue{background:#185FA5;border-color:#0C447C;color:#fff}
+.btn-green{background:#3B6D11;border-color:#27500A;color:#fff}
+.btn-red{background:var(--redbg);border-color:var(--redbr);color:var(--red)}
+.btn-amber{background:var(--amberbg);border-color:var(--amberbr);color:var(--amber)}
+.btn-neutral{background:var(--bg3);border-color:var(--b2);color:var(--t2)}
+.tl-back{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--t2);padding:2px 7px;border-radius:4px;border:0.5px solid var(--b2);background:transparent;cursor:pointer}
+.kbd{font-size:9px;padding:1px 4px;border:0.5px solid var(--b2);border-radius:3px;background:var(--bg3);color:var(--t3);font-family:var(--font-mono)}
+.tl-sep{width:0.5px;background:var(--b1);height:16px;margin:0 2px}
+.body{display:flex;flex:1;overflow:hidden;min-height:0}
+.file-panel{width:196px;min-width:196px;border-right:0.5px solid var(--b1);background:var(--bg1);display:flex;flex-direction:column}
+.fp-sec{padding:7px 10px 3px;font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;display:flex;align-items:center;justify-content:space-between;border-bottom:0.5px solid var(--b1)}
+.fp-file{display:flex;align-items:center;gap:6px;padding:5px 10px;border-bottom:0.5px solid var(--b1);cursor:pointer;position:relative}
+.fp-file:hover{background:var(--bg2)}
+.fp-file.active{background:var(--bg2)}
+.fp-file.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--blue)}
+.fp-cb{width:14px;height:14px;border:1px solid var(--b2);border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:9px;background:var(--bg3)}
+.fp-cb.chk{background:#185FA5;border-color:#0C447C;color:#fff}
+.fp-cb.par{background:var(--bluebg);border-color:var(--blue);color:var(--blue)}
+.fp-name{flex:1;font-size:10px;color:var(--t1);font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fp-stat-a{color:var(--green);font-size:9px}
+.fp-stat-d{color:var(--red);font-size:9px}
+.fp-badge{font-size:8px;font-weight:500;padding:1px 3px;border-radius:2px;flex-shrink:0}
+.fb-m{background:var(--bluebg);color:var(--blue)}
+.fb-a{background:var(--greenbg);color:var(--green)}
+.fb-d{background:var(--redbg);color:var(--red)}
+.staged-bar{padding:5px 10px;background:var(--bluebg);border-top:0.5px solid var(--bluebr);font-size:10px;color:var(--blue);display:flex;align-items:center;gap:5px;margin-top:auto}
+.diff-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.diff-toolbar{height:30px;border-bottom:0.5px solid var(--b1);display:flex;align-items:center;padding:0 10px;gap:6px;background:var(--bg2);flex-shrink:0}
+.diff-fname{font-size:11px;font-weight:500;color:var(--t1);font-family:var(--font-mono);flex:1}
+.diff-meta{font-size:10px;color:var(--t3)}
+.diff-body{flex:1;overflow:hidden;font-family:var(--font-mono);font-size:11px;line-height:1.7}
+.hunk-hdr{display:flex;align-items:center;padding:3px 10px;background:var(--bg2);border-top:0.5px solid var(--b1);border-bottom:0.5px solid var(--b1);gap:8px}
+.hunk-lbl{font-size:10px;color:var(--t3);flex:1}
+.dline{display:flex;min-height:22px}
+.dln{width:32px;font-size:9px;color:var(--t3);text-align:right;padding:0 5px;background:var(--bg2);border-right:0.5px solid var(--b1);flex-shrink:0;display:flex;align-items:center;justify-content:flex-end}
+.dgut{width:18px;background:var(--bg2);border-right:0.5px solid var(--b1);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--t3)}
+.ds{width:14px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0}
+.dc{flex:1;padding:0 8px;white-space:pre;color:var(--t2)}
+.da{background:var(--greenbg)}.da .dln{background:#162218}.da .dgut{background:#162218}.da .ds,.da .dc{color:var(--green)}
+.dd{background:var(--redbg)}.dd .dln{background:#241414}.dd .dgut{background:#241414}.dd .ds,.dd .dc{color:var(--red)}
+.dk .ds{color:transparent}
+.staged .dgut{color:var(--blue)}
+.unstaged{opacity:.38}
+.commit-panel{width:214px;min-width:214px;border-left:0.5px solid var(--b1);background:var(--bg2);display:flex;flex-direction:column}
+.cp-hdr{padding:9px 12px 7px;border-bottom:0.5px solid var(--b1)}
+.cp-lbl{font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px}
+.cp-msg{width:100%;min-height:68px;border:1px solid var(--b2);border-radius:5px;background:var(--bg3);font-size:11px;color:var(--t1);font-family:var(--font-sans);padding:5px 7px;resize:none;outline:none;line-height:1.5}
+.cp-body{flex:1;padding:9px 12px;display:flex;flex-direction:column;gap:9px;overflow:hidden}
+.cp-sec{font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
+.cp-stat{display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px}
+.cp-opt{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--t2);cursor:pointer;padding:2px 0}
+.cp-opt input{accent-color:var(--blue);width:12px;height:12px}
+.cp-avatar{width:20px;height:20px;border-radius:50%;background:var(--bluebg);color:var(--blue);font-size:9px;font-weight:500;display:flex;align-items:center;justify-content:center}
+.cp-footer{padding:9px 12px;border-top:0.5px solid var(--b1);display:flex;flex-direction:column;gap:5px}
+.commit-btn{width:100%;padding:8px;border-radius:5px;border:none;background:#185FA5;color:#fff;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
+.amend-btn{width:100%;padding:6px;border-radius:5px;border:1px solid var(--bluebr);background:var(--bluebg);color:var(--blue);font-size:11px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px}
+</style>
+<div class="app">
+  <div class="titlebar">
+    <div class="dots"><div class="dot dr"></div><div class="dot dy"></div><div class="dot dg"></div></div>
+    <button class="tl-back"><i class="ti ti-arrow-left" aria-hidden="true"></i>history<span class="kbd">Esc</span></button>
+    <div class="tl-title">trunk — staging</div>
+    <div style="display:flex;gap:4px;align-items:center;margin-left:auto">
+      <div class="btn btn-red"><i class="ti ti-trash" aria-hidden="true"></i>discard all</div>
+      <div class="tl-sep"></div>
+      <div class="btn btn-amber"><i class="ti ti-archive" aria-hidden="true"></i>stash</div>
+      <div class="btn btn-neutral"><i class="ti ti-settings" aria-hidden="true"></i></div>
+    </div>
+  </div>
+  <div class="body">
+    <div class="file-panel">
+      <div class="fp-sec">Unstaged<div class="btn btn-green" style="height:18px;font-size:9px;padding:0 6px">stage all</div></div>
+      <div class="fp-file active">
+        <div class="fp-cb par">−</div><span class="fp-name">token.rs</span>
+        <span><span class="fp-stat-a">+18</span> <span class="fp-stat-d">−4</span></span>
+        <span class="fp-badge fb-m">M</span>
+      </div>
+      <div class="fp-file">
+        <div class="fp-cb"></div><span class="fp-name">middleware.rs</span>
+        <span><span class="fp-stat-a">+3</span></span>
+        <span class="fp-badge fb-m">M</span>
+      </div>
+      <div class="fp-file">
+        <div class="fp-cb chk"><i class="ti ti-check" aria-hidden="true"></i></div><span class="fp-name">auth_integration.rs</span>
+        <span><span class="fp-stat-a">+9</span> <span class="fp-stat-d">−2</span></span>
+        <span class="fp-badge fb-a">A</span>
+      </div>
+      <div class="fp-file">
+        <div class="fp-cb"></div><span class="fp-name">config.toml</span>
+        <span><span class="fp-stat-a">+1</span> <span class="fp-stat-d">−1</span></span>
+        <span class="fp-badge fb-m">M</span>
+      </div>
+      <div class="fp-file">
+        <div class="fp-cb"></div><span class="fp-name">old_oauth.rs</span>
+        <span><span class="fp-stat-d">−88</span></span>
+        <span class="fp-badge fb-d">D</span>
+      </div>
+      <div class="staged-bar"><i class="ti ti-circle-check" style="font-size:11px" aria-hidden="true"></i>2 of 5 files staged</div>
+    </div>
+    <div class="diff-panel">
+      <div class="diff-toolbar">
+        <span class="diff-fname">src/auth/token.rs</span>
+        <span class="diff-meta">+18 −4 · partially staged</span>
+        <div style="margin-left:auto;display:flex;gap:5px">
+          <div class="btn btn-green" style="height:20px;font-size:9px">stage file</div>
+        </div>
+      </div>
+      <div class="diff-body">
+        <div class="hunk-hdr">
+          <span class="hunk-lbl">@@ -38,4 +38,2 @@ impl TokenValidator {</span>
+          <div class="btn btn-green" style="height:18px;font-size:9px;padding:0 6px">stage hunk</div>
+        </div>
+        <div class="dline dk unstaged"><div class="dln">38</div><div class="dgut">○</div><div class="ds"> </div><div class="dc">pub fn new(config: Config) -> Self {</div></div>
+        <div class="dline dd unstaged"><div class="dln">40</div><div class="dgut">○</div><div class="ds">−</div><div class="dc">    pub fn is_valid_old(&self) -> bool {</div></div>
+        <div class="dline dd unstaged"><div class="dln">41</div><div class="dgut">○</div><div class="ds">−</div><div class="dc">        t.len() > 0 && !t.contains("expired")</div></div>
+        <div class="dline dk unstaged"><div class="dln">42</div><div class="dgut"></div><div class="ds"> </div><div class="dc">}</div></div>
+        <div class="hunk-hdr">
+          <span class="hunk-lbl">@@ -42,7 +42,22 @@ impl TokenValidator {</span>
+          <div class="btn btn-amber" style="height:18px;font-size:9px;padding:0 6px">unstage hunk</div>
+        </div>
+        <div class="dline dk staged"><div class="dln">42</div><div class="dgut">●</div><div class="ds"> </div><div class="dc">pub fn validate(&self, token: &str) -> Result&lt;&gt; {</div></div>
+        <div class="dline dd staged"><div class="dln">43</div><div class="dgut">●</div><div class="ds">−</div><div class="dc">    if token.is_expired() { return Err(AuthError) }</div></div>
+        <div class="dline da staged"><div class="dln">43</div><div class="dgut">●</div><div class="ds">+</div><div class="dc">    let now = SystemTime::now();</div></div>
+        <div class="dline da staged"><div class="dln">44</div><div class="dgut">●</div><div class="ds">+</div><div class="dc">    if token.expires_at &lt; now {</div></div>
+        <div class="dline da staged"><div class="dln">45</div><div class="dgut">●</div><div class="ds">+</div><div class="dc">        return self.refresh_flow(r);</div></div>
+        <div class="dline da staged"><div class="dln">46</div><div class="dgut">●</div><div class="ds">+</div><div class="dc">    }</div></div>
+        <div class="dline dk staged"><div class="dln">47</div><div class="dgut">●</div><div class="ds"> </div><div class="dc">}</div></div>
+      </div>
+    </div>
+    <div class="commit-panel">
+      <div class="cp-hdr">
+        <div class="cp-lbl">Commit message</div>
+        <textarea class="cp-msg">fix: handle refresh token expiry edge case
+
+Tokens now check expiry against SystemTime.</textarea>
+      </div>
+      <div class="cp-body">
+        <div>
+          <div class="cp-sec">Staged summary</div>
+          <div class="cp-stat"><span style="color:var(--t2)">Files</span><span style="color:var(--t1);font-weight:500">2 staged</span></div>
+          <div class="cp-stat"><span style="color:var(--t2)">Lines</span><span><span style="color:var(--green)">+27</span> <span style="color:var(--red)">−6</span></span></div>
+        </div>
+        <div>
+          <div class="cp-sec">Options</div>
+          <label class="cp-opt"><input type="checkbox">Amend last commit</label>
+          <label class="cp-opt"><input type="checkbox">Sign with SSH</label>
+          <label class="cp-opt"><input type="checkbox">Push after commit</label>
+        </div>
+        <div>
+          <div class="cp-sec">Author</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="cp-avatar">YO</div>
+            <div><div style="font-size:11px;color:var(--t1)">you</div><div style="font-size:9px;color:var(--t3)">you@example.com</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="cp-sec">Branch</div>
+          <div style="font-size:11px;color:var(--t1);display:flex;align-items:center;gap:5px">
+            <span style="width:7px;height:7px;border-radius:50%;background:var(--blue);display:inline-block"></span>main
+          </div>
+        </div>
+      </div>
+      <div class="cp-footer">
+        <button class="commit-btn"><i class="ti ti-git-commit" style="font-size:13px" aria-hidden="true"></i>commit to main</button>
+        <button class="amend-btn"><i class="ti ti-edit" style="font-size:12px" aria-hidden="true"></i>amend last commit</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,9 @@
+# Example .trunk workspace file (PRD §15.4.1) — for local dev/testing only.
+# Real .trunk files are user-chosen paths anywhere on disk, not an app config directory.
+
+name = "sample-workspace"
+repositories = ["../"]
+last_active_repository = "../"
+
+[overrides]
+tag_version_group_pattern = "^(v\\d+)\\."

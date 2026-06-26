@@ -1,0 +1,77 @@
+/* trunk — components.css  |  Shared component rules, built on dark.css tokens.
+   Session 1 scaffold: base button/utility rules only. Each screen session adds the
+   component rules it needs (commit row, diff lines, dialogs, etc. — see SPEC.md). */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: 11px;
+}
+
+/* ── buttons — semantic variants (PRD §5) ─────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-blue {
+  background: var(--btn-blue-bg);
+  border-color: var(--btn-blue-border);
+  color: #FFFFFF;
+}
+
+.btn-green {
+  background: var(--btn-green-bg);
+  border-color: var(--btn-green-border);
+  color: #FFFFFF;
+}
+
+.btn-red {
+  background: var(--red-bg);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.btn-amber {
+  background: var(--amber-bg);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.btn-neutral {
+  background: var(--btn-neutral-bg);
+  border-color: var(--btn-neutral-border);
+  color: var(--text-primary);
+}
+
+/* Disabled — always gray regardless of semantic colour (PRD §5.2). */
+.btn:disabled,
+.btn.disabled {
+  background: var(--btn-disabled-bg);
+  border-color: var(--btn-disabled-border);
+  color: var(--btn-disabled-text);
+  cursor: not-allowed;
+}
+
+/* Force-delete pattern (PRD §13.4): disabled at 40% opacity until the
+   mandatory acknowledgement checkbox is checked, rather than the standard
+   disabled palette — kept as a utility since it's a one-off override. */
+.btn.disabled-40 {
+  opacity: 0.4;
+  pointer-events: none;
+}

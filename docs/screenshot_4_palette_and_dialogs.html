@@ -1,0 +1,212 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans);background:var(--color-background-secondary);padding:12px;display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.col-label{font-size:10px;font-weight:500;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px}
+
+/* PALETTE */
+.palette{
+  --bg0:#0D1117;--bg1:#161B22;--bg2:#1C2128;--bg3:#22272E;--bg4:#2D333B;
+  --b1:#30363D;--b2:#444C56;
+  --t1:#CDD9E5;--t2:#768390;--t3:#444C56;
+  --blue:#539BF5;--bluebg:#1C2A3A;--bluebr:#2F6F9F;
+  --green:#57AB5A;--greenbg:#1B2A1F;--greenbr:#2D6A30;
+  --red:#E5534B;--redbg:#2D1B1B;
+  --amber:#C69026;--amberbg:#2D2415;--amberbr:#6E4A00;
+  --purple:#986EE2;--purbg:#261E3A;
+  background:var(--bg1);border:0.5px solid var(--b2);border-radius:10px;overflow:hidden;
+  box-shadow:0 8px 32px rgba(0,0,0,.4);width:100%;max-width:480px;
+}
+.pal-inp-row{display:flex;align-items:center;padding:0 13px;gap:9px;border-bottom:0.5px solid var(--b1);background:var(--bg1)}
+.pal-inp{flex:1;border:none;outline:none;font-size:13px;color:var(--t1);background:transparent;padding:12px 0;font-family:var(--font-sans)}
+.esc-badge{font-size:9px;padding:2px 5px;border:0.5px solid var(--b2);border-radius:3px;background:var(--bg3);color:var(--t3);font-family:var(--font-mono)}
+.scope-row{display:flex;gap:0;padding:4px 13px 0;background:var(--bg2);border-bottom:0.5px solid var(--b1)}
+.stab{font-size:10px;padding:4px 9px;border-radius:4px 4px 0 0;border:0.5px solid transparent;color:var(--t2);cursor:pointer;margin-bottom:-1px}
+.stab.active{background:var(--bg1);border-color:var(--b1);border-bottom-color:var(--bg1);color:var(--t1);font-weight:500}
+.pal-sec{padding:6px 13px 2px;font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em}
+.pal-row{display:flex;align-items:center;padding:6px 13px;gap:9px;cursor:pointer}
+.pal-row:hover,.pal-row.sel{background:var(--bg2)}
+.pal-row.sel{background:var(--bluebg)}
+.pi{width:26px;height:26px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.pi-g{background:var(--greenbg);color:var(--green)}
+.pi-b{background:var(--bluebg);color:var(--blue)}
+.pi-r{background:var(--redbg);color:var(--red)}
+.pi-a{background:var(--amberbg);color:var(--amber)}
+.pi-p{background:var(--purbg);color:var(--purple)}
+.pi-n{background:var(--bg3);color:var(--t2)}
+.pal-label{font-size:12px;color:var(--t1);flex:1}
+.pal-desc{font-size:10px;color:var(--t2)}
+.pal-kbd{font-size:9px;padding:2px 5px;border:0.5px solid var(--b2);border-radius:3px;background:var(--bg3);color:var(--t1);font-family:var(--font-mono)}
+.pal-footer{height:28px;border-top:0.5px solid var(--b1);background:var(--bg2);display:flex;align-items:center;padding:0 13px;gap:12px}
+.pal-hint{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--t3)}
+
+/* DIALOGS */
+.dlg{
+  --bg0:#0D1117;--bg1:#161B22;--bg2:#1C2128;--bg3:#22272E;--bg4:#2D333B;
+  --b1:#30363D;--b2:#444C56;
+  --t1:#CDD9E5;--t2:#768390;--t3:#444C56;
+  --blue:#539BF5;--bluebg:#1C2A3A;--bluebr:#2F6F9F;
+  --green:#57AB5A;--greenbg:#1B2A1F;--greenbr:#2D6A30;
+  --red:#E5534B;--redbg:#2D1B1B;--redbr:#6E2020;
+  --amber:#C69026;--amberbg:#2D2415;--amberbr:#6E4A00;
+  background:var(--bg2);border:0.5px solid var(--b2);border-radius:10px;overflow:hidden;
+  box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:380px;width:100%;
+}
+.dh{padding:11px 13px 8px;border-bottom:0.5px solid var(--b1);background:var(--bg1);display:flex;align-items:flex-start;gap:8px}
+.dh-icon{width:26px;height:26px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.ic-g{background:var(--greenbg);color:var(--green)}
+.ic-b{background:var(--bluebg);color:var(--blue)}
+.ic-r{background:var(--redbg);color:var(--red)}
+.dh-title{font-size:12px;font-weight:500;color:var(--t1);margin-bottom:1px}
+.dh-sub{font-size:10px;color:var(--t2)}
+.db{padding:11px 13px;display:flex;flex-direction:column;gap:8px}
+.lbl{font-size:9px;font-weight:500;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
+.inp{width:100%;border:1px solid var(--b2);border-radius:5px;background:var(--bg3);font-size:11px;color:var(--t1);padding:5px 8px;outline:none;font-family:var(--font-mono)}
+.inp.ok{border-color:var(--greenbr)}
+.inp.err{border-color:var(--redbr)}
+.hint-ok{font-size:9px;color:var(--green);margin-top:2px}
+.hint-err{font-size:9px;color:var(--red);margin-top:2px}
+.sel-dlg{width:100%;border:1px solid var(--b2);border-radius:5px;background:var(--bg3);font-size:11px;color:var(--t1);padding:5px 8px;outline:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23768390' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 6px center;padding-right:20px}
+.df{display:flex;flex-direction:column;gap:2px}
+.br-list{border:0.5px solid var(--b2);border-radius:5px;overflow:hidden}
+.br-row{display:flex;align-items:center;gap:7px;padding:6px 9px;border-bottom:0.5px solid var(--b1);cursor:pointer}
+.br-row:last-child{border-bottom:none}
+.br-row:hover{background:var(--bg3)}
+.br-row.sel{background:var(--bluebg)}
+.br-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.br-name{font-family:var(--font-mono);font-size:11px;color:var(--t1);flex:1}
+.br-badge{font-size:9px;padding:1px 5px;background:var(--bluebg);border:0.5px solid var(--bluebr);border-radius:3px;color:var(--blue)}
+.br-time{font-size:9px;color:var(--t3)}
+.cb-opt{display:flex;align-items:flex-start;gap:6px;cursor:pointer;padding:2px 0}
+.cb-opt input{accent-color:var(--blue);width:12px;height:12px;margin-top:2px;flex-shrink:0}
+.cb-label{font-size:11px;color:var(--t1)}
+.cb-desc{font-size:9px;color:var(--t2);margin-top:1px;line-height:1.4}
+.info-box{border-radius:5px;padding:6px 9px;display:flex;gap:7px;font-size:10px;line-height:1.5;border:0.5px solid}
+.ib-amber{background:var(--amberbg);border-color:var(--amberbr);color:var(--amber)}
+.ib-green{background:var(--greenbg);border-color:var(--greenbr);color:var(--green)}
+.dfoot{padding:8px 13px;border-top:0.5px solid var(--b1);background:var(--bg1);display:flex;gap:6px;justify-content:flex-end}
+.btn{height:24px;padding:0 10px;border-radius:5px;font-size:10px;font-weight:500;display:flex;align-items:center;gap:4px;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.btn i{font-size:11px}
+.btn-blue{background:#185FA5;border-color:#0C447C;color:#fff}
+.btn-green{background:#3B6D11;border-color:#27500A;color:#fff}
+.btn-red{background:var(--redbg);border-color:var(--redbr);color:var(--red)}
+.btn-neutral{background:var(--bg3);border-color:var(--b2);color:var(--t2)}
+.divider{height:0.5px;background:var(--b1);margin:1px 0}
+.create-link{font-size:10px;color:var(--t3);display:flex;align-items:center;gap:4px;padding:5px 0 1px;border-top:0.5px dashed var(--b1);margin-top:2px;cursor:pointer}
+.kbd-sm{font-size:9px;padding:1px 4px;border:0.5px solid var(--b2);border-radius:3px;background:var(--bg3);color:var(--t3);font-family:var(--font-mono)}
+</style>
+
+<div>
+  <div class="col-label">Command palette (⌘K)</div>
+  <div class="palette">
+    <div class="pal-inp-row">
+      <i class="ti ti-search" style="font-size:15px;color:var(--t3)" aria-hidden="true"></i>
+      <input class="pal-inp" value="bra" readonly>
+      <span class="esc-badge">Esc</span>
+    </div>
+    <div class="scope-row">
+      <div class="stab active">All</div>
+      <div class="stab">Git</div>
+      <div class="stab">Navigate</div>
+      <div class="stab">View</div>
+      <div class="stab">Repos</div>
+    </div>
+    <div class="pal-sec">Branches</div>
+    <div class="pal-row sel">
+      <div class="pi pi-b"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
+      <div style="flex:1"><div class="pal-label" style="color:var(--blue)">main</div><div class="pal-desc">Currently checked out</div></div>
+      <span style="font-size:9px;padding:1px 5px;background:var(--bluebg);border:0.5px solid var(--bluebr);border-radius:3px;color:var(--blue)">current</span>
+    </div>
+    <div class="pal-row">
+      <div class="pi pi-n"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
+      <div style="flex:1"><div class="pal-label">feat/oauth</div><div class="pal-desc">Switch to this branch</div></div>
+      <span style="font-size:9px;padding:1px 5px;background:var(--bg3);border:0.5px solid var(--b2);border-radius:3px;color:var(--t2)">checkout</span>
+    </div>
+    <div class="pal-sec">Git</div>
+    <div class="pal-row">
+      <div class="pi pi-g"><i class="ti ti-plus" aria-hidden="true"></i></div>
+      <div style="flex:1"><div class="pal-label">Create branch</div><div class="pal-desc">Create a new branch from HEAD or selected commit</div></div>
+      <span class="pal-kbd">⌘⇧B</span>
+    </div>
+    <div class="pal-row">
+      <div class="pi pi-b"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
+      <div style="flex:1"><div class="pal-label">Switch branch</div><div class="pal-desc">Checkout an existing local branch</div></div>
+      <span class="pal-kbd">⌘B</span>
+    </div>
+    <div class="pal-row">
+      <div class="pi pi-a"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
+      <div style="flex:1"><div class="pal-label">Interactive rebase</div><div class="pal-desc">Reorder, squash, or drop commits interactively</div></div>
+      <span class="pal-kbd">⌘⇧R</span>
+    </div>
+    <div class="pal-footer">
+      <div class="pal-hint"><span class="kbd-sm">↑↓</span>navigate</div>
+      <div class="pal-hint"><span class="kbd-sm">↵</span>run</div>
+      <div class="pal-hint"><span class="kbd-sm">Tab</span>scope</div>
+      <div style="margin-left:auto"><div class="pal-hint"><span class="kbd-sm">⌘K</span>close</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <!-- Create branch -->
+  <div style="flex:1;min-width:260px">
+    <div class="col-label">Create branch (⌘⇧B)</div>
+    <div class="dlg">
+      <div class="dh">
+        <div class="dh-icon ic-g"><i class="ti ti-plus" aria-hidden="true"></i></div>
+        <div><div class="dh-title">Create branch</div><div class="dh-sub">New branch from HEAD or a chosen point</div></div>
+      </div>
+      <div class="db">
+        <div class="df"><div class="lbl">Branch name</div><input class="inp ok" value="feat/new-feature"><div class="hint-ok">✓ Valid name · no conflicts</div></div>
+        <div class="df"><div class="lbl">Starting point</div><select class="sel-dlg"><option>main (HEAD · a3f9c1)</option><option>feat/oauth (b7e2d4)</option></select></div>
+        <div class="divider"></div>
+        <label class="cb-opt"><input type="checkbox" checked><div><div class="cb-label">Checkout after creating</div><div class="cb-desc">Switch to the new branch immediately</div></div></label>
+        <label class="cb-opt"><input type="checkbox"><div><div class="cb-label">Push to remote after creating</div><div class="cb-desc">Set up upstream tracking on origin</div></div></label>
+      </div>
+      <div class="dfoot">
+        <div class="btn btn-neutral">Cancel</div>
+        <div class="btn btn-green"><i class="ti ti-plus" aria-hidden="true"></i>Create branch</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Switch branch + Delete branch -->
+  <div style="flex:1;min-width:260px;display:flex;flex-direction:column;gap:14px">
+    <div>
+      <div class="col-label">Switch branch (⌘B)</div>
+      <div class="dlg">
+        <div class="dh">
+          <div class="dh-icon ic-b"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
+          <div><div class="dh-title">Switch branch</div><div class="dh-sub">Checkout a local or remote branch</div></div>
+        </div>
+        <div class="db">
+          <input class="inp" placeholder="Search branches…" style="font-family:var(--font-sans)">
+          <div class="br-list">
+            <div class="br-row sel"><span class="br-dot" style="background:#539BF5"></span><span class="br-name">main</span><span class="br-badge">current</span></div>
+            <div class="br-row"><span class="br-dot" style="background:#57AB5A"></span><span class="br-name">feat/oauth</span><span class="br-time">5h ago</span></div>
+            <div class="br-row"><span class="br-dot" style="background:#C69026"></span><span class="br-name">fix/cors</span><span class="br-time">1d ago</span></div>
+          </div>
+          <div class="info-box ib-amber"><i class="ti ti-alert-triangle" style="font-size:11px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i><div>3 uncommitted changes will carry over to the target branch unless they conflict.</div></div>
+          <div class="create-link"><i class="ti ti-plus" style="font-size:11px" aria-hidden="true"></i>Create new branch… <span class="kbd-sm">⌘⇧B</span></div>
+        </div>
+        <div class="dfoot"><div class="btn btn-neutral">Cancel</div><div class="btn btn-blue"><i class="ti ti-git-branch" aria-hidden="true"></i>Switch</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="col-label">Delete branch (unmerged warning)</div>
+      <div class="dlg">
+        <div class="dh">
+          <div class="dh-icon ic-r"><i class="ti ti-trash" aria-hidden="true"></i></div>
+          <div><div class="dh-title">Delete branch</div><div class="dh-sub">Permanently remove this branch</div></div>
+        </div>
+        <div class="db">
+          <div class="df"><div class="lbl">Branch</div><input class="inp" value="feat/ws" disabled style="opacity:.5"></div>
+          <div class="info-box" style="background:var(--redbg);border-color:var(--redbr);color:var(--red)"><i class="ti ti-alert-triangle" style="font-size:11px;flex-shrink:0;margin-top:1px" aria-hidden="true"></i><div><strong>feat/ws has 4 unmerged commits</strong> not present in main. Deleting will permanently lose this work.</div></div>
+          <label class="cb-opt"><input type="checkbox"><div><div class="cb-label" style="color:var(--red);font-weight:500">I understand this work may be lost</div><div class="cb-desc">Required to confirm deletion of an unmerged branch</div></div></label>
+        </div>
+        <div class="dfoot"><div class="btn btn-neutral">Cancel</div><div class="btn btn-red" style="opacity:.4"><i class="ti ti-trash" aria-hidden="true"></i>Force delete</div></div>
+      </div>
+    </div>
+  </div>
+</div>

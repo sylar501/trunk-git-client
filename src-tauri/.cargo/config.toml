@@ -1,0 +1,5 @@
+# rustc's bundled rust-lld produces corrupted .eh_frame sections on this toolchain/platform
+# combination, breaking the final link step for tauri and several proc-macro crates. Force
+# the system GNU linker instead. Revisit if a future toolchain update fixes upstream rust-lld.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=bfd"]

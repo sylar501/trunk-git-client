@@ -1,0 +1,27 @@
+# Rust / Cargo build artifacts
+/target/
+/src-tauri/target/
+
+# Tauri generated platform projects (gen/android, gen/apple) and bundle output
+/src-tauri/gen/
+
+# .trunk files are user data, not source — ignore any that land at the repo root by accident
+# (Cargo.lock is intentionally tracked: this is a binary crate, not a library)
+/*.trunk
+!/dev-fixtures/*.trunk
+
+# Frontend tooling (none yet, scaffolded for when it lands)
+node_modules/
+dist/
+
+# Editor/OS cruft
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
+.env
+.env.*

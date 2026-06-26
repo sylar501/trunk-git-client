@@ -1,0 +1,66 @@
+/* trunk — dark.css  |  Official dark theme (PRD §17.1) */
+/* Edit this file to customise. Hot-reloads on save (see PRD §17). */
+
+:root {
+  /* ── backgrounds — 5 depth levels ──────────────────────────── */
+  --bg-base:          #0D1117;   /* titlebar, window chrome, terminal background */
+  --bg-primary:       #161B22;   /* main content area, graph canvas, sidebar */
+  --bg-secondary:     #1C2128;   /* cards, setting groups, overlay panels */
+  --bg-tertiary:       #22272E;   /* inputs, dropdowns, toolbar buttons */
+  --bg-raised:         #2D333B;   /* hover states, toggle tracks, kbd badge backgrounds */
+
+  /* ── borders — 2 levels ────────────────────────────────────── */
+  --border-subtle:     #30363D;   /* default dividers, card edges, section separators */
+  --border-default:    #444C56;   /* inputs, controls, interactive element borders */
+
+  /* ── text — 4 levels ───────────────────────────────────────── */
+  --text-primary:      #CDD9E5;   /* main labels, commit messages, values */
+  --text-secondary:    #768390;   /* descriptions, metadata, timestamps */
+  --text-tertiary:     #444C56;   /* section labels, placeholder text, hints */
+  --text-dim:           #2D333B;   /* disabled states, ghost text */
+
+  /* ── semantic accents — foreground + tinted background pairs ── */
+  --blue:               #539BF5;   /* primary / constructive, selection, HEAD lane */
+  --blue-bg:            #1C2A3A;
+  --green:              #57AB5A;   /* additive / stage, diff additions, success */
+  --green-bg:           #1B2A1F;
+  --red:                #E5534B;   /* destructive, diff deletions, danger */
+  --red-bg:             #2D1B1B;
+  --amber:              #C69026;   /* caution / reversible, local-only badges, warnings */
+  --amber-bg:           #2D2415;
+  --purple:             #986EE2;   /* annotated tags, workspaces */
+  --purple-bg:          #261E3A;
+
+  /* ── graph branch lanes — 7 colours, similar perceptual brightness ── */
+  --lane-1:             #539BF5;   /* blue   — HEAD / main */
+  --lane-2:             #57AB5A;   /* green */
+  --lane-3:             #C69026;   /* amber */
+  --lane-4:             #986EE2;   /* purple */
+  --lane-5:             #D4537E;   /* pink */
+  --lane-6:             #39C5CF;   /* teal */
+  --lane-7:             #D08444;   /* orange */
+  --pink:               #D4537E;
+  --teal:               #39C5CF;
+  --orange:             #D08444;
+
+  /* ── button colour system (PRD §5) ────────────────────────────
+     Solid blue/green buttons are brand-locked and keep the same literal
+     value in dark theme — confirmed by the dark-theme mockups, which use
+     these exact hex values rather than the lighter --blue/--green accents
+     (those are reserved for text/icon/selection use, not solid button fills).
+     Red/amber buttons use the theme-tinted --red-bg/--amber-bg instead. */
+  --btn-blue-bg:        #185FA5;
+  --btn-blue-border:    #0C447C;
+  --btn-green-bg:       #3B6D11;
+  --btn-green-border:   #27500A;
+  --btn-neutral-bg:     var(--bg-tertiary);
+  --btn-neutral-border: var(--border-default);
+
+  /* disabled state — always gray regardless of semantic colour (PRD §5.2) */
+  --btn-disabled-bg:     #2D333B;
+  --btn-disabled-border: #444C56;
+  --btn-disabled-text:   #768390;
+
+  /* ── ui scale (PRD §17, zoom 70–150%) ─────────────────────────── */
+  --ui-scale: 1;
+}

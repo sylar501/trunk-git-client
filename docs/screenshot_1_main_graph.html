@@ -1,0 +1,220 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+.app{
+  --bg0:#0D1117;--bg1:#161B22;--bg2:#1C2128;--bg3:#22272E;--bg4:#2D333B;
+  --b1:#30363D;--b2:#444C56;
+  --t1:#CDD9E5;--t2:#768390;--t3:#444C56;
+  --blue:#539BF5;--bluebg:#1C2A3A;--bluebr:#2F6F9F;
+  --green:#57AB5A;--greenbg:#1B2A1F;--greenbr:#2D6A30;
+  --red:#E5534B;--redbg:#2D1B1B;
+  --amber:#C69026;--amberbg:#2D2415;--amberbr:#6E4A00;
+  --purple:#986EE2;--purbg:#261E3A;
+  font-family:var(--font-sans);background:var(--bg0);
+  border:0.5px solid var(--b1);border-radius:10px;overflow:hidden;
+  display:flex;flex-direction:column;min-height:560px;
+}
+.titlebar{height:32px;background:var(--bg0);border-bottom:0.5px solid var(--b1);display:flex;align-items:center;padding:0 12px;gap:8px;flex-shrink:0}
+.dots{display:flex;gap:5px}
+.dot{width:10px;height:10px;border-radius:50%}
+.dr{background:#E24B4A}.dy{background:#EF9F27}.dg{background:#639922}
+.tl-title{flex:1;text-align:center;font-size:12px;font-weight:500;color:var(--t2)}
+.tl-btn{height:22px;padding:0 9px;border-radius:5px;font-size:10px;font-weight:500;display:flex;align-items:center;gap:4px;cursor:pointer;border:0.5px solid var(--b2);color:var(--t2);background:transparent;white-space:nowrap}
+.tl-btn.warn{background:var(--amberbg);border-color:var(--amberbr);color:var(--amber)}
+.tl-btn.neutral{background:var(--bg3)}
+.tl-sep{width:0.5px;background:var(--b1);height:16px;margin:0 2px}
+.body{display:flex;flex:1;overflow:hidden;min-height:0}
+.sidebar{width:156px;min-width:156px;border-right:0.5px solid var(--b1);background:var(--bg1);display:flex;flex-direction:column;flex-shrink:0}
+.ws-row{padding:7px 10px;border-bottom:0.5px solid var(--b1);display:flex;align-items:center;justify-content:space-between}
+.ws-name{font-size:11px;font-weight:500;color:var(--t1);display:flex;align-items:center;gap:5px}
+.sb-sec{padding:7px 10px 3px;font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;display:flex;align-items:center;justify-content:space-between}
+.sb-sec i{font-size:11px;color:var(--t3);cursor:pointer}
+.sb-item{display:flex;align-items:center;gap:6px;padding:4px 10px;font-size:11px;color:var(--t2);cursor:pointer;position:relative}
+.sb-item:hover{background:var(--bg2)}
+.sb-item.active{background:var(--bg2);color:var(--blue)}
+.sb-item.active::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--blue)}
+.sb-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.sb-badge{margin-left:auto;font-size:9px;padding:1px 5px;border-radius:8px;background:var(--bluebg);color:var(--blue);border:0.5px solid var(--bluebr)}
+.sb-footer{margin-top:auto;border-top:0.5px solid var(--b1);padding:5px 0}
+.graph{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.graph-toolbar{height:34px;border-bottom:0.5px solid var(--b1);display:flex;align-items:center;padding:0 10px;gap:6px;background:var(--bg1);flex-shrink:0}
+.search{height:22px;flex:1;max-width:200px;border:0.5px solid var(--b2);border-radius:4px;background:var(--bg3);font-size:10px;color:var(--t3);padding:0 7px;display:flex;align-items:center;gap:4px}
+.fpill{font-size:9px;padding:2px 7px;border:0.5px solid var(--b1);border-radius:10px;color:var(--t3);cursor:pointer}
+.fpill.active{background:var(--bluebg);color:var(--blue);border-color:var(--bluebr)}
+.graph-body{flex:1;overflow:hidden;position:relative;background:var(--bg1)}
+.crow{display:flex;align-items:center;height:30px;border-bottom:0.5px solid var(--b1);cursor:pointer}
+.crow:hover{background:var(--bg2)}
+.crow.sel{background:var(--bluebg)}
+.crow.sel::after{content:'';position:absolute;right:0;top:0;bottom:0;width:0} /* handled by overlay */
+.gcol{width:64px;min-width:64px;display:flex;align-items:center;justify-content:center}
+.cmeta{display:flex;align-items:center;flex:1;gap:6px;padding-right:10px;min-width:0}
+.cmsg{flex:1;font-size:11px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cauth{font-size:10px;color:var(--t3)}
+.ctime{font-size:10px;color:var(--t3)}
+.csha{font-family:var(--font-mono);font-size:9px;color:var(--t3)}
+.bpill{font-size:9px;font-weight:500;padding:1px 5px;border-radius:3px;white-space:nowrap;flex-shrink:0;border:0.5px solid}
+.bp-main{background:var(--bluebg);color:var(--blue);border-color:var(--bluebr)}
+.bp-feat{background:var(--greenbg);color:var(--green);border-color:var(--greenbr)}
+.bp-fix{background:var(--amberbg);color:var(--amber);border-color:var(--amberbr)}
+.bp-tag{background:var(--purbg);color:var(--purple);border-color:#5A3E8A}
+.bp-rem{background:var(--bg3);color:var(--t2);border-color:var(--b2)}
+.overlay{position:absolute;top:0;right:0;bottom:0;width:264px;background:var(--bg2);border-left:0.5px solid var(--b2);display:flex;flex-direction:column;z-index:10}
+.ov-hdr{padding:10px 12px 8px;border-bottom:0.5px solid var(--b1);display:flex;align-items:flex-start;gap:8px}
+.ov-msg{font-size:12px;font-weight:500;color:var(--t1);line-height:1.4;flex:1}
+.ov-x{width:20px;height:20px;border-radius:4px;border:0.5px solid var(--b2);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--t3);flex-shrink:0;cursor:pointer}
+.ov-meta{padding:7px 12px;border-bottom:0.5px solid var(--b1)}
+.ov-row{display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px}
+.ov-lbl{color:var(--t3)}
+.ov-val{color:var(--t2);font-family:var(--font-mono)}
+.ov-val.p{font-family:var(--font-sans)}
+.ov-sec{padding:7px 12px 3px;font-size:9px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.07em}
+.ov-file{display:flex;align-items:center;gap:5px;padding:4px 12px;font-size:10px;color:var(--t2);border-bottom:0.5px solid var(--b1);cursor:pointer}
+.ov-file.sel{background:var(--bluebg);color:var(--blue)}
+.ov-add{color:var(--green);font-size:9px;min-width:22px;text-align:right}
+.ov-del{color:var(--red);font-size:9px;min-width:20px;text-align:right}
+.ov-fn{flex:1;font-family:var(--font-mono);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.diff{flex:1;overflow:hidden;font-family:var(--font-mono);font-size:10px;line-height:1.7;padding:6px 0}
+.dline{display:flex;min-height:20px}
+.dln{width:28px;font-size:9px;color:var(--t3);text-align:right;padding:0 4px;background:var(--bg1);border-right:0.5px solid var(--b1);flex-shrink:0;display:flex;align-items:center;justify-content:flex-end}
+.ds{width:12px;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0}
+.dc{flex:1;padding:0 6px;white-space:pre;color:var(--t2)}
+.da{background:#1B2A1F}.da .dln{background:#162218}.da .ds,.da .dc{color:var(--green)}
+.dd{background:#2D1B1B}.dd .dln{background:#241414}.dd .ds,.dd .dc{color:var(--red)}
+.dk .ds{color:transparent}
+.ov-actions{padding:8px 12px;border-top:0.5px solid var(--b1);display:flex;flex-wrap:wrap;gap:5px}
+.ov-btn{font-size:10px;padding:4px 8px;border:0.5px solid var(--b2);border-radius:4px;background:transparent;color:var(--t2);cursor:pointer;display:flex;align-items:center;gap:4px}
+.term-drawer{border-top:2px solid var(--blue);background:var(--bg0);flex-shrink:0}
+.term-hdr{height:26px;background:var(--bg2);border-bottom:0.5px solid var(--b1);display:flex;align-items:center;padding:0 10px;gap:0}
+.term-tab{font-size:10px;color:var(--t3);padding:0 10px;height:100%;display:flex;align-items:center;gap:4px;border-right:0.5px solid var(--b1)}
+.term-tab.active{color:var(--blue);background:var(--bg1)}
+.term-body{padding:6px 10px;font-family:var(--font-mono);font-size:10px;color:var(--t2);line-height:1.7;height:80px;overflow:hidden}
+.term-prompt{color:var(--green)}
+.term-out{color:var(--t3)}
+.tcursor{display:inline-block;width:7px;height:11px;background:var(--blue);vertical-align:middle;animation:blink 1s step-end infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+</style>
+<div class="app">
+  <div class="titlebar">
+    <div class="dots"><div class="dot dr"></div><div class="dot dy"></div><div class="dot dg"></div></div>
+    <div class="tl-title">trunk — api-service</div>
+    <div style="display:flex;gap:4px;align-items:center;margin-left:auto">
+      <div class="tl-btn warn"><i class="ti ti-circle-dot" style="font-size:11px" aria-hidden="true"></i> stage changes <span style="background:rgba(198,144,38,.25);color:var(--amber);font-size:9px;padding:1px 5px;border-radius:8px;margin-left:2px">3</span></div>
+      <div class="tl-sep"></div>
+      <div class="tl-btn neutral"><i class="ti ti-git-merge" style="font-size:11px" aria-hidden="true"></i> fetch</div>
+      <div class="tl-btn neutral"><i class="ti ti-arrow-up" style="font-size:11px" aria-hidden="true"></i> push</div>
+      <div class="tl-sep"></div>
+      <div class="tl-btn neutral"><i class="ti ti-search" style="font-size:11px" aria-hidden="true"></i> ⌘K</div>
+      <div class="tl-btn neutral"><i class="ti ti-settings" style="font-size:11px" aria-hidden="true"></i></div>
+    </div>
+  </div>
+  <div class="body">
+    <div class="sidebar">
+      <div class="ws-row">
+        <span class="ws-name"><i class="ti ti-layout-grid" style="font-size:12px;color:var(--t3)" aria-hidden="true"></i>work / backend</span>
+        <i class="ti ti-selector" style="font-size:12px;color:var(--t3)" aria-hidden="true"></i>
+      </div>
+      <div class="sb-sec">Repos <i class="ti ti-plus" aria-hidden="true"></i></div>
+      <div class="sb-item active"><i class="ti ti-git-branch" style="font-size:12px" aria-hidden="true"></i>api-service</div>
+      <div class="sb-item"><i class="ti ti-git-branch" style="font-size:12px;color:var(--t3)" aria-hidden="true"></i>auth-service</div>
+      <div class="sb-item"><i class="ti ti-git-branch" style="font-size:12px;color:var(--t3)" aria-hidden="true"></i>frontend</div>
+      <div class="sb-sec" style="margin-top:4px">Branches</div>
+      <div class="sb-item active"><span class="sb-dot" style="background:var(--blue)"></span>main<span class="sb-badge">HEAD</span></div>
+      <div class="sb-item"><span class="sb-dot" style="background:var(--green)"></span>feat/oauth</div>
+      <div class="sb-item"><span class="sb-dot" style="background:var(--amber)"></span>fix/cors</div>
+      <div class="sb-item"><span class="sb-dot" style="background:#D4537E"></span>feat/ws</div>
+      <div class="sb-sec" style="margin-top:4px">Remotes</div>
+      <div class="sb-item"><i class="ti ti-cloud" style="font-size:12px" aria-hidden="true"></i>origin<span class="sb-badge">↑2</span></div>
+      <div class="sb-sec" style="margin-top:4px">Stashes</div>
+      <div class="sb-item"><i class="ti ti-archive" style="font-size:12px" aria-hidden="true"></i>2 stashes</div>
+      <div class="sb-sec" style="margin-top:4px">Tags</div>
+      <div class="sb-item"><i class="ti ti-tag" style="font-size:12px" aria-hidden="true"></i>v2.1.0</div>
+      <div class="sb-footer">
+        <div class="sb-item"><i class="ti ti-settings" style="font-size:12px" aria-hidden="true"></i>preferences</div>
+      </div>
+    </div>
+    <div class="graph">
+      <div class="graph-toolbar">
+        <div class="search"><i class="ti ti-search" style="font-size:10px" aria-hidden="true"></i><span>filter commits…</span></div>
+        <div class="fpill active">all branches</div>
+        <div class="fpill">mine</div>
+        <div class="fpill">this week</div>
+        <div style="margin-left:auto"><div class="tl-btn neutral"><i class="ti ti-git-branch" style="font-size:11px" aria-hidden="true"></i> rebase</div></div>
+      </div>
+      <div class="graph-body" style="position:relative">
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><circle cx="32" cy="15" r="5" fill="var(--blue)"/><line x1="32" y1="0" x2="32" y2="10" stroke="var(--blue)" stroke-width="1.5"/><line x1="32" y1="20" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="bpill bp-main">main</span><span class="bpill bp-rem">origin/main</span><span class="cmsg">feat: add OAuth2 login flow with PKCE</span><span class="cauth">you</span><span class="ctime">2h</span><span class="csha">a3f9c1</span></div>
+        </div>
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><line x1="32" y1="0" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/><line x1="48" y1="0" x2="48" y2="30" stroke="var(--green)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="bpill bp-feat">feat/oauth</span><span class="cmsg">refactor: extract token validation logic</span><span class="cauth">sara</span><span class="ctime">5h</span><span class="csha">b7e2d4</span></div>
+        </div>
+        <div class="crow sel">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><line x1="32" y1="0" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/><circle cx="48" cy="15" r="4.5" fill="none" stroke="var(--green)" stroke-width="1.5"/><line x1="48" y1="0" x2="48" y2="10.5" stroke="var(--green)" stroke-width="1.5"/><line x1="48" y1="19.5" x2="48" y2="30" stroke="var(--green)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="cmsg">fix: handle refresh token expiry edge case</span><span class="cauth">sara</span><span class="ctime">7h</span><span class="csha">c1a8f2</span></div>
+        </div>
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><line x1="32" y1="0" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/><line x1="48" y1="0" x2="48" y2="30" stroke="var(--green)" stroke-width="1.5"/><circle cx="56" cy="15" r="4" fill="none" stroke="var(--amber)" stroke-width="1.5"/><line x1="56" y1="0" x2="56" y2="11" stroke="var(--amber)" stroke-width="1.5"/><line x1="56" y1="19" x2="56" y2="30" stroke="var(--amber)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="bpill bp-fix">fix/cors</span><span class="cmsg">fix: add CORS preflight headers for /api/*</span><span class="cauth">you</span><span class="ctime">1d</span><span class="csha">d4c3b1</span></div>
+        </div>
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><line x1="32" y1="0" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/><line x1="48" y1="0" x2="48" y2="30" stroke="var(--green)" stroke-width="1.5"/><path d="M56 0 L56 19 Q56 30 48 30" fill="none" stroke="var(--amber)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="cmsg">fix: OPTIONS method routing in middleware</span><span class="cauth">you</span><span class="ctime">1d</span><span class="csha">e9f1a3</span></div>
+        </div>
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><line x1="32" y1="0" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/><line x1="48" y1="0" x2="48" y2="30" stroke="var(--green)" stroke-width="1.5"/><circle cx="32" cy="15" r="4.5" fill="none" stroke="var(--blue)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="cmsg">chore: bump Axum to 0.8.1, update Cargo.lock</span><span class="cauth">bot</span><span class="ctime">2d</span><span class="csha">f2b7e8</span></div>
+        </div>
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><path d="M48 0 L48 15 Q48 30 32 30" fill="none" stroke="var(--green)" stroke-width="1.5"/><line x1="32" y1="0" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/><circle cx="32" cy="15" r="4.5" fill="none" stroke="var(--blue)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="cmsg">Merge branch feat/ws into main</span><span class="cauth">you</span><span class="ctime">3d</span><span class="csha">0a1c2d</span></div>
+        </div>
+        <div class="crow">
+          <div class="gcol"><svg width="64" height="30" style="overflow:visible"><circle cx="32" cy="15" r="4.5" fill="none" stroke="var(--blue)" stroke-width="1.5"/><line x1="32" y1="0" x2="32" y2="10.5" stroke="var(--blue)" stroke-width="1.5"/><line x1="32" y1="19.5" x2="32" y2="30" stroke="var(--blue)" stroke-width="1.5"/></svg></div>
+          <div class="cmeta"><span class="bpill bp-tag">v2.1.0</span><span class="cmsg">release: tag v2.1.0 — WebSocket stable</span><span class="cauth">you</span><span class="ctime">4d</span><span class="csha">1b3d5f</span></div>
+        </div>
+        <!-- overlay -->
+        <div class="overlay">
+          <div class="ov-hdr"><div class="ov-msg">fix: handle refresh token expiry edge case</div><div class="ov-x"><i class="ti ti-x" aria-hidden="true"></i></div></div>
+          <div class="ov-meta">
+            <div class="ov-row"><span class="ov-lbl">Author</span><span class="ov-val p">sara · sara@example.com</span></div>
+            <div class="ov-row"><span class="ov-lbl">Date</span><span class="ov-val p">today, 08:14</span></div>
+            <div class="ov-row"><span class="ov-lbl">SHA</span><span class="ov-val">c1a8f2b</span></div>
+          </div>
+          <div class="ov-sec">Changed files</div>
+          <div class="ov-file sel"><span class="ov-add">+18</span><span class="ov-del">−4</span><span class="ov-fn">src/auth/token.rs</span></div>
+          <div class="ov-file"><span class="ov-add">+3</span><span class="ov-del">−0</span><span class="ov-fn">src/auth/middleware.rs</span></div>
+          <div class="ov-file"><span class="ov-add">+9</span><span class="ov-del">−2</span><span class="ov-fn">tests/auth_integration.rs</span></div>
+          <div class="diff">
+            <div class="dline dk"><div class="dln">42</div><div class="ds"> </div><div class="dc">pub fn validate(&self, token: &str) {</div></div>
+            <div class="dline dd"><div class="dln">43</div><div class="ds">−</div><div class="dc">    if token.is_expired() { Err(e) }</div></div>
+            <div class="dline da"><div class="dln">43</div><div class="ds">+</div><div class="dc">    let now = SystemTime::now();</div></div>
+            <div class="dline da"><div class="dln">44</div><div class="ds">+</div><div class="dc">    if token.expires_at &lt; now {</div></div>
+            <div class="dline da"><div class="dln">45</div><div class="ds">+</div><div class="dc">        return self.refresh_flow(r);</div></div>
+            <div class="dline da"><div class="dln">46</div><div class="ds">+</div><div class="dc">    }</div></div>
+            <div class="dline dk"><div class="dln">47</div><div class="ds"> </div><div class="dc">}</div></div>
+          </div>
+          <div class="ov-actions">
+            <div class="ov-btn"><i class="ti ti-git-cherry-pick" style="font-size:11px" aria-hidden="true"></i>cherry-pick</div>
+            <div class="ov-btn"><i class="ti ti-rotate-clockwise" style="font-size:11px" aria-hidden="true"></i>revert</div>
+            <div class="ov-btn"><i class="ti ti-git-branch" style="font-size:11px" aria-hidden="true"></i>branch here</div>
+            <div class="ov-btn"><i class="ti ti-copy" style="font-size:11px" aria-hidden="true"></i>copy SHA</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="term-drawer">
+    <div class="term-hdr">
+      <div class="term-tab active"><i class="ti ti-terminal" style="font-size:10px" aria-hidden="true"></i>bash</div>
+      <div class="term-tab"><i class="ti ti-plus" style="font-size:10px" aria-hidden="true"></i></div>
+      <div style="margin-left:auto;font-size:9px;color:var(--t3);padding:0 8px">api-service</div>
+    </div>
+    <div class="term-body">
+      <div><span class="term-prompt">~/api-service (main) $</span> <span style="color:var(--t1)">git log --oneline -3</span></div>
+      <div class="term-out">a3f9c1 feat: add OAuth2 login flow with PKCE</div>
+      <div class="term-out">b7e2d4 refactor: extract token validation logic</div>
+      <div><span class="term-prompt">~/api-service (main) $</span> <span class="tcursor"></span></div>
+    </div>
+  </div>
+</div>
