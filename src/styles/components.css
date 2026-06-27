@@ -75,3 +75,263 @@ body {
   opacity: 0.4;
   pointer-events: none;
 }
+
+/* ── dialog chrome (Component Library §10) ───────────────────────────
+   Header (icon chip + title + subtitle) · body · footer (meta left /
+   actions right). Radius 8 per the Component Library — note this differs
+   from the 10px used in the docs/screenshot_4 mockup; the Library is the
+   more authoritative single-purpose reference. Reused by every dialog in
+   the app (clone wizard, nested-repo choice, create-workspace prompt, and
+   future branch/tag/stash dialogs). */
+
+.dlg-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dlg {
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+}
+
+.dlg.dlg-small {
+  width: 440px;
+}
+
+.dh {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 11px 13px 8px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dh-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dh-icon.ic-b { background: var(--blue-bg); color: var(--blue); }
+.dh-icon.ic-g { background: var(--green-bg); color: var(--green); }
+.dh-icon.ic-r { background: var(--red-bg); color: var(--red); }
+.dh-icon.ic-a { background: var(--amber-bg); color: var(--amber); }
+.dh-icon.ic-p { background: var(--purple-bg); color: var(--purple); }
+
+.dh-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dh-sub {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.db {
+  padding: 11px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.df {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lbl {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.inp {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.inp.ok { border-color: var(--green); }
+.inp.err { border-color: var(--red); }
+
+/* Text field + action button (e.g. "Browse…") on one row. Flex children default to
+   min-width:auto, which lets a long input value force the row wider than its dialog
+   instead of shrinking the input — min-width:0 here is what actually fixes that. */
+.field-row {
+  display: flex;
+  gap: 6px;
+}
+
+.field-row .inp {
+  flex: 1;
+  min-width: 0;
+}
+
+.hint-ok { font-size: 10px; color: var(--green); }
+.hint-err { font-size: 10px; color: var(--red); }
+
+.info-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 5px;
+  border: 0.5px solid transparent;
+  font-size: 10px;
+}
+
+.info-box.ib-amber { background: var(--amber-bg); border-color: var(--amber); color: var(--amber); }
+.info-box.ib-green { background: var(--green-bg); border-color: var(--green); color: var(--green); }
+.info-box.ib-blue { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+.info-box.ib-red { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+
+.divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 2px 0;
+}
+
+.dfoot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 13px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ── toasts ────────────────────────────────────────────────────────── */
+
+.toast-root {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 1100;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border-default);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.toast-info { border-color: var(--blue); }
+.toast-success { border-color: var(--green); }
+.toast-warning { border-color: var(--amber); }
+.toast-danger { border-color: var(--red); }
+
+/* ── context menu (Component Library §11) ────────────────────────── */
+
+.ctx-menu {
+  position: fixed;
+  min-width: 160px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+  z-index: 1200;
+}
+
+.ctx-item {
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ctx-item:hover { background: var(--bg-raised); }
+.ctx-item.danger { color: var(--red); }
+
+.ctx-separator {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+/* ── empty state card (Component Library §13) ────────────────────────
+   Centred card with icon, title, description, action buttons, drag
+   hint — used by the Welcome screen's nested-repo flows and reused by
+   the empty-workspace state (PRD §15.7, SPEC.md item 2). */
+
+.empty-state-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 32px;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.empty-state-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-state-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.empty-state-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.empty-state-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.empty-state-hint {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}

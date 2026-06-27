@@ -14,8 +14,6 @@ Primary differentiator: raw performance on large repositories.
 
 ## Key docs (read when relevant, not upfront)
 - Full feature spec: trunk-requirements-3.docx (PRD v2.0, "Final" — 25 sections, §1–§25).
-  trunk-requirements.docx / -2.docx are an earlier v1.0 draft with §10–16 and §19–20
-  unwritten — do not use them.
 - Component library & dark theme palette: trunk-claude-design-briefing.docx, plus the
   single-page visual reference in "Trunk Component Library.pdf"
 - UI screens: see screenshot_*.html files in docs/

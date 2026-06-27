@@ -1,0 +1,5 @@
+name = "trunk-git-client"
+repositories = ["trunk-git-client"]
+last_active_repository = "trunk-git-client"
+
+[overrides]

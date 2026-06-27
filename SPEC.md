@@ -1,9 +1,7 @@
 # Trunk — Implementation Spec
 
 Feature-by-feature checklist, ordered by dependency. Each entry cites the PRD section in
-`docs/trunk-requirements-3.docx` (v2.0 — the authoritative spec; supersedes the earlier
-`trunk-requirements.docx` / `-2.docx` drafts). One screen/feature per Claude Code session,
-per the recommended workflow in `docs/trunk-claudecode-handoff.docx`.
+`docs/trunk-requirements-3.docx` (v2.0 — the authoritative spec;). One screen/feature per Claude Code session, per the recommended workflow in `docs/trunk-claudecode-handoff.docx`.
 
 Mark an entry `[x]` only when its acceptance criteria are fully met and the working tree
 for that session has been committed.
@@ -21,30 +19,48 @@ for that session has been committed.
 
 ---
 
-## 1. Welcome screen — §15.1
+## 1. [x] Welcome screen — §15.1
 
-- **Frontend**: `src/welcome.html`, `src/components/dialog.js` (clone dialog, §15.5)
-- **Backend**: `open_repository`, `open_workspace`, `list_recent`, `create_empty_workspace`,
-  `detect_nested_repos` (§15.2)
+- **Frontend**: `src/welcome.html`, `src/components/dialog.js` (clone dialog, §15.5.1),
+  `src/components/toast.js`, `src/components/context-menu.js`
+- **Backend**: `open_repository`, `open_workspace`, `list_recent`, `remove_recent`,
+  `create_workspace` (generalized — also used for "Open as workspace" below),
+  `detect_nested_repos` (§15.2), `clone_repository` (§15.5.1, real `git2` clone with
+  streamed progress events — not deferred to item 15)
 - **Dependencies**: scaffold (0)
 - **Acceptance criteria**:
   - Open Repository (blue) and Clone Repository (green) primary buttons.
+  - Clone Repository is a fully working 3-step dialog (Source / Destination / Progress,
+    §15.5.1) with real streamed clone progress, not a stub — this pulls the welcome-screen-context
+    half of what was originally scoped to item 15 forward into this session, so the button is
+    never shipped non-functional. The workspace-context variant (§15.5.2, the future `+` button)
+    is explicitly NOT built here — see item 2.
   - Recent list: mixed repos (blue icon) and workspaces (purple icon), sorted by last-opened;
     stale paths shown with amber warning icon, non-clickable, removable via right-click.
   - "Create empty workspace" secondary text link prompts name + directory, writes an empty
     `.trunk` file, opens in Workspace mode.
   - Fast path: if a previously active repo/workspace exists on disk, skip welcome and open
-    directly to the graph view.
+    directly to the graph view. **Implemented but disabled** (`FAST_PATH_ENABLED = false` in
+    `src/js/welcome.js`) until the Main graph view (3) exists — `index.html` is currently an
+    empty placeholder with no way back to Welcome, so skipping straight to it is a dead end
+    during development. Re-enable that flag once item 3 lands.
   - Nested-repo detection rule (§15.2) applies only from this screen: plain `.git` opens
     immediately as a repository; `.git` + nested repos triggers the "Open as repository" /
-    "Open as workspace" choice dialog.
+    "Open as workspace" choice dialog. "Open as workspace" here auto-includes the root + all
+    detected nested repos with no per-repo picker (the interactive checklist UI is explicitly
+    NOT built here — see item 2, §15.6).
 
-## 2. Repository mode / Workspace mode plumbing — §15.3, §15.4
+## 2. Repository mode / Workspace mode plumbing — §15.3, §15.4, §15.5.2, §15.6
 
-- **Frontend**: sidebar shell shared by `index.html` (Repositories section toggle)
+- **Frontend**: sidebar shell shared by `index.html` (Repositories section toggle), workspace-context
+  clone dialog variant (§15.5.2, reuses `dialog.js`), nested-repo workspace-creation flow
+  (§15.6, separate 2-step dialog: workspace-file path step, then per-repo checklist with
+  relative path + remote/last-commit hint, "Create workspace" disabled at zero selections)
 - **Backend**: mode resolution in `workspace::open_repository` / `load_workspace`,
   `.trunk` read/write (name, repo paths with relative-to-file fallback, last-active-repo,
-  per-workspace overrides), active-repo switching
+  per-workspace overrides), active-repo switching, `clone_repository` reused for the
+  workspace-context variant (no "create a workspace" checkbox; success auto-adds the clone
+  to the current `.trunk` and makes it active)
 - **Dependencies**: Welcome screen (1)
 - **Acceptance criteria**:
   - Repository mode: no Repositories sidebar section; non-interactive pin label with repo
@@ -52,6 +68,13 @@ for that session has been committed.
     from UI and command palette; "Promote to workspace…" available via palette only.
   - Workspace mode: Repositories section with `+` button (Add existing / Clone new); exactly
     one active repo at a time; switching is instant and always lands on the graph view.
+  - "Clone new" from the `+` button opens the workspace-context clone dialog (§15.5.2): same
+    3-step flow as item 1's clone dialog minus the "create a workspace" checkbox; on success the
+    clone is auto-added to the current `.trunk` and becomes active.
+  - "Add existing" from the `+` button, when the selected folder has nested repos, opens the
+    interactive nested-repo picker (§15.6) — NOT the auto-include-all shortcut used by item 1's
+    welcome-screen choice dialog. This picker, and item 1's simpler auto-include path, are two
+    distinct entry points into the same underlying `create_workspace` backend command.
   - Switching repos mid-conflict-resolution: warns "switch anyway / cancel", conflict markers
     on disk untouched. Mid-rebase: hard-blocked, no override.
   - Empty workspace (§15.7): centred empty-state card (icon, "No repositories yet", green Add
@@ -73,6 +96,8 @@ for that session has been committed.
   - Performance: <500ms initial render at 10k commits, <2s at 100k commits, 60fps scroll, DOM
     virtualised to visible rows only.
   - Filter bar: composable filters, non-matching commits dimmed (not hidden) to preserve topology.
+  - Re-enable the Welcome screen's fast path (`FAST_PATH_ENABLED` in `src/js/welcome.js`,
+    disabled in item 1) now that this view exists and gives the user somewhere real to land.
 
 ## 4. Commit detail overlay — §4.3
 
@@ -288,24 +313,15 @@ for that session has been committed.
       blue button.
   - Footer: neutral Cancel / blue Save. Opened via ⌘, / Ctrl+, / toolbar button / sidebar item.
 
-## 15. Clone dialog (+ nested-repo detection) — §15.2, §15.5–15.6
+## 15. ~~Clone dialog (+ nested-repo detection) — §15.2, §15.5–15.6~~ — merged into items 1 & 2
 
-- **Frontend**: 3-step dialog (Source / Destination / Progress), nested-repo workspace-creation
-  flow (separate 2-step dialog)
-- **Backend**: smart URL inference (HTTPS/SSH, GitHub/GitLab/Bitbucket), `git clone` with
-  streamed log output, `.trunk` creation when requested
-- **Dependencies**: Welcome screen (1), Repository/Workspace mode (2)
-- **Acceptance criteria**:
-  - Welcome-screen context: Step 1 URL field with smart inference; Step 2 "Clone into" path +
-    optional "Also create a workspace" checkbox revealing an independently-editable workspace
-    file path; Step 3 real streamed clone log (not a spinner), success opens in the resulting
-    mode, failure shows inline error + Retry with fields restored.
-  - Workspace context (`+` button): no "create a workspace" option; success auto-adds the
-    clone to the current `.trunk` and makes it active.
-  - Nested-repo workspace creation (§15.6): Step 1 workspace-file path pre-filled
-    (parent+folder+`.trunk`, editable, folder picker); Step 2 checklist of detected repos incl.
-    root (default checked), each showing relative path + remote/last-commit hint; "Create
-    workspace" disabled at zero selections with a hint message.
+Originally scoped here, but shipping a non-functional "Clone Repository" button (or a
+nested-repo choice with no working "Open as workspace") was judged worse than slightly
+reordering work. Its content was split: the welcome-screen-context clone dialog (§15.5.1) and
+a simplified (auto-include-all, no picker) nested-repo "Open as workspace" path moved to item 1;
+the workspace-context clone variant (§15.5.2) and the interactive per-repo checklist picker
+(§15.6) moved to item 2, since both genuinely need item 2's `+`-button sidebar to exist first.
+This entry is kept (not deleted) to preserve numbering for anything referencing it below.
 
 ## 16. Backend cross-cutting work (threaded through the above)
 

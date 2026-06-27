@@ -1,16 +1,31 @@
 <!doctype html>
-<!-- Welcome screen shell — Session 1 placeholder only. Built out in Session 2 (PRD §15.1). -->
+<!-- Welcome screen (PRD §15.1). True app entry point (tauri.conf.json window url) — its
+     bootstrap script runs the fast-path check before painting any UI. -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <title>Trunk</title>
   <link rel="stylesheet" href="styles/dark.css" />
   <link rel="stylesheet" href="styles/components.css" />
+  <link rel="stylesheet" href="styles/welcome.css" />
 </head>
 <body>
-  <div class="app">
-    <!-- Open / Clone / Create empty workspace / Recent list land in Session 2 -->
+  <div class="welcome" id="welcome-root" hidden>
+    <div class="welcome-hero">
+      <div class="welcome-title">Trunk</div>
+      <div class="welcome-tagline">Fast, native Git client</div>
+      <div class="welcome-actions">
+        <button class="btn btn-blue" id="btn-open-repo">Open Repository</button>
+        <button class="btn btn-green" id="btn-clone-repo">Clone Repository</button>
+      </div>
+    </div>
+    <div class="welcome-recent">
+      <div class="welcome-recent-header">Recent</div>
+      <div class="recent-list" id="recent-list"></div>
+      <div class="recent-empty" id="recent-empty" hidden>No repositories or workspaces opened yet.</div>
+    </div>
+    <a href="#" class="welcome-create-link" id="link-create-workspace">Create empty workspace</a>
   </div>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/welcome.js"></script>
 </body>
 </html>
