@@ -335,3 +335,105 @@ body {
   color: var(--text-tertiary);
   margin-top: 4px;
 }
+
+/* ── sidebar — Repositories section only (PRD §4.2, §15.3, §15.4.2) ──
+   Ported from docs/screenshot_1_main_graph.html's mockup CSS, remapped onto the real
+   dark.css tokens. Only the `.ws-row` pin/header and one `.sb-sec`/`.sb-item` Repos block
+   are built here — Branches/Remotes/Stashes/Tags/`.sb-footer` are SPEC.md item 3+. */
+
+.sidebar {
+  width: 156px;
+  min-width: 156px;
+  border-right: 0.5px solid var(--border-subtle);
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.ws-row {
+  padding: 7px 10px;
+  border-bottom: 0.5px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ws-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sb-sec {
+  padding: 7px 10px 3px;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sb-sec .sb-add {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.sb-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  position: relative;
+}
+
+.sb-item:hover { background: var(--bg-raised); }
+
+.sb-item.active {
+  background: var(--bg-raised);
+  color: var(--blue);
+}
+
+.sb-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--blue);
+}
+
+.sb-item.stale {
+  color: var(--amber);
+  opacity: 0.7;
+  cursor: default;
+}
+
+.sb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-tertiary);
+}
+
+.sb-badge {
+  margin-left: auto;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--blue-bg);
+  color: var(--blue);
+  border: 0.5px solid var(--blue);
+}

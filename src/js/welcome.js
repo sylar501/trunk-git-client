@@ -135,7 +135,16 @@ async function handleOpenRepository() {
 
 async function handleCloneRepository() {
   const outcome = await openCloneDialog();
-  if (outcome) goToGraph();
+  if (!outcome) return;
+  // Clone itself only writes to disk (repo + optional .trunk) — open it the same way the
+  // nested-repo choice dialog does, so AppState (mode/active repo) is populated before
+  // index.html asks `get_app_state` for what to render in the sidebar.
+  if (outcome.workspacePath) {
+    await openWorkspace(outcome.workspacePath);
+  } else {
+    await openRepository(outcome.repoPath);
+  }
+  goToGraph();
 }
 
 async function handleCreateEmptyWorkspace() {

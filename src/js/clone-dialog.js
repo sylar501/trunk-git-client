@@ -15,8 +15,13 @@ function joinPath(dir, name) {
   return `${dir.replace(/[/\\]+$/, "")}/${name}`;
 }
 
-/** Resolves with `{ repoPath, workspacePath }` on a successful clone; never resolves on cancel. */
-export function openCloneDialog() {
+/**
+ * Resolves with `{ repoPath, workspacePath }` on a successful clone; never resolves on
+ * cancel. Pass `{ workspaceContext: trunkPath }` for the workspace-context variant (PRD
+ * §15.5.2, SPEC.md item 2): Step 2 then skips the "Also create a workspace" checkbox
+ * entirely and the clone is added to the already-open `.trunk` on success.
+ */
+export function openCloneDialog({ workspaceContext } = {}) {
   return new Promise((resolve) => {
     const state = { url: "", destination: "", createWorkspace: false, workspacePath: "" };
     // Default "Clone into" should always be a full absolute path, never a bare relative
@@ -59,6 +64,7 @@ export function openCloneDialog() {
             <div class="btn btn-neutral" id="clone-dest-browse">Browse…</div>
           </div>
         </div>
+        ${workspaceContext ? "" : `
         <label class="cb-opt" style="display:flex;align-items:center;gap:8px;">
           <input type="checkbox" id="clone-mk-ws" ${state.createWorkspace ? "checked" : ""}>
           <span>Also create a workspace</span>
@@ -70,6 +76,7 @@ export function openCloneDialog() {
             <div class="btn btn-neutral" id="clone-ws-browse">Browse…</div>
           </div>
         </div>
+        `}
       `);
       dlg.setFooter(`
         <div class="btn btn-neutral" id="clone-back">Back</div>
@@ -85,30 +92,32 @@ export function openCloneDialog() {
         if (folder) destInput.value = `${folder}/${state.destination.split("/").pop()}`;
       });
 
-      dlg.bodyEl.querySelector("#clone-ws-browse").addEventListener("click", async () => {
-        const folder = await pickFolder();
-        if (!folder) return;
-        const currentName = wsPathInput.value.split("/").pop() || `${state.destination.split("/").pop()}.trunk`;
-        wsPathInput.value = `${folder}/${currentName}`;
-      });
+      if (!workspaceContext) {
+        dlg.bodyEl.querySelector("#clone-ws-browse").addEventListener("click", async () => {
+          const folder = await pickFolder();
+          if (!folder) return;
+          const currentName = wsPathInput.value.split("/").pop() || `${state.destination.split("/").pop()}.trunk`;
+          wsPathInput.value = `${folder}/${currentName}`;
+        });
 
-      wsCheckbox.addEventListener("change", () => {
-        wsField.style.display = wsCheckbox.checked ? "" : "none";
-        if (wsCheckbox.checked && !wsPathInput.value) {
-          wsPathInput.value = `${state.destination}.trunk`;
-        }
-      });
+        wsCheckbox.addEventListener("change", () => {
+          wsField.style.display = wsCheckbox.checked ? "" : "none";
+          if (wsCheckbox.checked && !wsPathInput.value) {
+            wsPathInput.value = `${state.destination}.trunk`;
+          }
+        });
+      }
 
       dlg.footerEl.querySelector("#clone-back").addEventListener("click", () => {
         state.destination = destInput.value.trim();
-        state.createWorkspace = wsCheckbox.checked;
-        state.workspacePath = wsPathInput.value.trim();
+        state.createWorkspace = workspaceContext ? false : wsCheckbox.checked;
+        state.workspacePath = workspaceContext ? "" : wsPathInput.value.trim();
         renderStep1();
       });
       dlg.footerEl.querySelector("#clone-go").addEventListener("click", () => {
         state.destination = destInput.value.trim();
-        state.createWorkspace = wsCheckbox.checked;
-        state.workspacePath = wsPathInput.value.trim();
+        state.createWorkspace = workspaceContext ? false : wsCheckbox.checked;
+        state.workspacePath = workspaceContext ? "" : wsPathInput.value.trim();
         if (!state.destination) return;
         renderStep3();
       });
@@ -135,8 +144,12 @@ export function openCloneDialog() {
         unlisten = fn;
       });
 
-      const workspacePath = state.createWorkspace ? state.workspacePath : null;
-      cloneRepository(state.url, state.destination, workspacePath)
+      const workspaceAction = workspaceContext
+        ? { kind: "add_to_existing", trunk_path: workspaceContext }
+        : state.createWorkspace
+        ? { kind: "create_new", trunk_path: state.workspacePath }
+        : { kind: "none" };
+      cloneRepository(state.url, state.destination, workspaceAction)
         .then((outcome) => {
           if (unlisten) unlisten();
           statusEl.textContent = "Clone complete.";

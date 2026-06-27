@@ -26,8 +26,8 @@ export async function createWorkspace(name, directory, initialRepos) {
   return invoke("create_workspace", { name, directory, initialRepos });
 }
 
-export async function cloneRepository(url, destination, workspacePath) {
-  return invoke("clone_repository", { url, destination, workspacePath });
+export async function cloneRepository(url, destination, workspaceAction) {
+  return invoke("clone_repository", { url, destination, workspaceAction });
 }
 
 export async function defaultDirectory() {
@@ -40,4 +40,25 @@ export async function onCloneProgress(handler) {
 
 export async function pickFolder() {
   return window.__TAURI__.dialog.open({ directory: true });
+}
+
+export async function switchActiveRepository(repoPath) {
+  return invoke("switch_active_repository", { repoPath });
+}
+
+export async function addExistingRepository(repoPath) {
+  return invoke("add_existing_repository", { repoPath });
+}
+
+export async function getAppState() {
+  return invoke("get_app_state");
+}
+
+export async function repoQuickInfo(path) {
+  return invoke("repo_quick_info", { path });
+}
+
+export async function onDragDrop(handler) {
+  const webview = window.__TAURI__.webview.getCurrentWebview();
+  return webview.onDragDropEvent((event) => handler(event.payload));
 }

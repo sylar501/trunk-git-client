@@ -50,7 +50,7 @@ for that session has been committed.
     detected nested repos with no per-repo picker (the interactive checklist UI is explicitly
     NOT built here — see item 2, §15.6).
 
-## 2. Repository mode / Workspace mode plumbing — §15.3, §15.4, §15.5.2, §15.6
+## 2. [x] Repository mode / Workspace mode plumbing — §15.3, §15.4, §15.5.2, §15.6 — Session 2
 
 - **Frontend**: sidebar shell shared by `index.html` (Repositories section toggle), workspace-context
   clone dialog variant (§15.5.2, reuses `dialog.js`), nested-repo workspace-creation flow
@@ -66,6 +66,10 @@ for that session has been committed.
   - Repository mode: no Repositories sidebar section; non-interactive pin label with repo
     name; "Add existing repository" / "Clone new repository" / "Switch repository" absent
     from UI and command palette; "Promote to workspace…" available via palette only.
+    — "Promote to workspace…" itself (the command's actual implementation) is deferred to
+    item 9 (command palette) since there is no palette to host it in yet — this item only
+    guarantees Repository-mode UI doesn't show the Add/Clone/Switch commands a palette would
+    otherwise need to hide. See item 9 when it lands.
   - Workspace mode: Repositories section with `+` button (Add existing / Clone new); exactly
     one active repo at a time; switching is instant and always lands on the graph view.
   - "Clone new" from the `+` button opens the workspace-context clone dialog (§15.5.2): same
@@ -75,6 +79,11 @@ for that session has been committed.
     interactive nested-repo picker (§15.6) — NOT the auto-include-all shortcut used by item 1's
     welcome-screen choice dialog. This picker, and item 1's simpler auto-include path, are two
     distinct entry points into the same underlying `create_workspace` backend command.
+    — Simplified to a single-step checklist (no separate "workspace file location" step):
+    the only entry point reachable from this session's UI is "add to the already-open
+    workspace" (the sidebar `+` button only exists in Workspace mode), so there is no
+    "create a new workspace" case to handle here. Loops `add_repository_to_workspace` per
+    checked row instead of calling `create_workspace`.
   - Switching repos mid-conflict-resolution: warns "switch anyway / cancel", conflict markers
     on disk untouched. Mid-rebase: hard-blocked, no override.
   - Empty workspace (§15.7): centred empty-state card (icon, "No repositories yet", green Add
