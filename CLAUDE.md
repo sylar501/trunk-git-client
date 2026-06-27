@@ -13,8 +13,8 @@ Primary differentiator: raw performance on large repositories.
 - Credential storage: OS-native (Keychain / DPAPI / Secret Service)
 
 ## Key docs (read when relevant, not upfront)
-- Full feature spec: trunk-requirements-3.docx (PRD v2.0, "Final" — 25 sections, §1–§25).
-- Component library & dark theme palette: trunk-claude-design-briefing.docx, plus the
+- Full feature spec: trunk-requirements-3.md (PRD v2.0, "Final" — 25 sections, §1–§25).
+- Component library & dark theme palette: trunk-claude-design-briefing.md, plus the
   single-page visual reference in "Trunk Component Library.pdf"
 - UI screens: see screenshot_*.html files in docs/
 

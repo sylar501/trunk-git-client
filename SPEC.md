@@ -1,7 +1,7 @@
 # Trunk — Implementation Spec
 
 Feature-by-feature checklist, ordered by dependency. Each entry cites the PRD section in
-`docs/trunk-requirements-3.docx` (v2.0 — the authoritative spec;). One screen/feature per Claude Code session, per the recommended workflow in `docs/trunk-claudecode-handoff.docx`.
+`docs/trunk-requirements-3.md` (v2.0 — the authoritative spec;). One screen/feature per Claude Code session, per the recommended workflow in `docs/trunk-claudecode-handoff.md`.
 
 Mark an entry `[x]` only when its acceptance criteria are fully met and the working tree
 for that session has been committed.
