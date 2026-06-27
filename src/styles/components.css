@@ -12,6 +12,22 @@ body {
   color: var(--text-primary);
   font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
   font-size: 11px;
+  user-select: none;
+  -webkit-user-select: none; /* WKWebView (macOS) / WebKitGTK (Linux) */
+}
+
+/* Re-enable selection only where copying text is the point — toast/info messages and form
+   fields. Graph-view commit metadata (.cmeta: message/author/time/SHA) is deliberately left
+   unselectable for now — that view will get its own dedicated text-selection UI later, so
+   plain click-drag selection there would just conflict with it. Everything else (sidebar
+   rows, toolbar buttons/pills, branch pills, context-menu items, dialog chrome) stays
+   unselectable like a native app. */
+input,
+textarea,
+.toast,
+.info-box {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ── buttons — semantic variants (PRD §5) ─────────────────────────── */
@@ -74,6 +90,51 @@ body {
 .btn.disabled-40 {
   opacity: 0.4;
   pointer-events: none;
+}
+
+/* ── loading spinner (shared utility) ─────────────────────────────────
+   Generic small/medium rotating ring, used anywhere a slow backend call (large-repo graph
+   walk, branch enumeration, etc.) needs to show "working" instead of an unexplained pause —
+   see graph-view.js's initial load and sidebar.js's Branches section. */
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--blue);
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner.lg {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+}
+
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.loading-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 /* ── dialog chrome (Component Library §10) ───────────────────────────
@@ -436,4 +497,193 @@ body {
   background: var(--blue-bg);
   color: var(--blue);
   border: 0.5px solid var(--blue);
+}
+
+/* ── main graph view (PRD §7, SPEC.md item 3) ─────────────────────────
+   Ported from docs/screenshot_1_main_graph.html's mockup CSS onto dark.css tokens.
+   Only the graph toolbar/body/row/pill rules item 3 needs — the commit-detail overlay
+   and terminal-drawer rules from that same mockup are items 4 and 16, not built here. */
+
+:root {
+  --row-height: 28px; /* configurable 22-36px (PRD §7.1); settings UI is item 14 */
+}
+
+.graph {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.graph-toolbar {
+  height: 34px;
+  border-bottom: 0.5px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 6px;
+  background: var(--bg-primary);
+  flex-shrink: 0;
+}
+
+.search-input {
+  height: 22px;
+  flex: 1;
+  max-width: 200px;
+  border: 0.5px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-size: 10px;
+  color: var(--text-primary);
+  padding: 0 7px;
+  font-family: inherit;
+}
+
+.search-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.fpill {
+  font-size: 9px;
+  padding: 2px 7px;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fpill.active {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.tb-spacer {
+  margin-left: auto;
+}
+
+.tb-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 0.5px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.tb-filters .inp {
+  height: 20px;
+  font-size: 10px;
+  width: 110px;
+}
+
+.graph-body {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  background: var(--bg-primary);
+}
+
+.graph-sizer {
+  position: relative;
+}
+
+.crow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  border-bottom: 0.5px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.crow:hover {
+  background: var(--bg-secondary);
+}
+
+.crow.sel {
+  background: var(--blue-bg);
+}
+
+.crow.dimmed {
+  opacity: 0.35;
+}
+
+.gcol {
+  width: 64px;
+  min-width: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cmeta {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 6px;
+  padding-right: 10px;
+  min-width: 0;
+}
+
+.bpills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.cmsg {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cauth,
+.ctime,
+.csha {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.csha {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ── branch/tag pills (PRD §7.1) ──────────────────────────────────── */
+
+.bpill {
+  font-size: 9px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 0.5px solid;
+}
+
+.bp-main {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.bp-tag {
+  background: var(--purple-bg);
+  color: var(--purple);
+  border-color: var(--purple);
+}
+
+.bp-rem {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-color: var(--border-default);
 }

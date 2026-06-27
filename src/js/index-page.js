@@ -1,7 +1,8 @@
-// index.html page controller (PRD §15.3/§15.4/§15.7, SPEC.md item 2) — mirrors welcome.js's
-// role for welcome.html. Mounts the sidebar, renders the empty-workspace state when there
-// are no repos yet, and wires "+", "Add existing"/"Clone new", and the drag-drop-onto-canvas
-// shortcut. The graph canvas itself stays a placeholder — SPEC.md item 3 builds it out.
+// index.html page controller (PRD §15.3/§15.4/§15.7, SPEC.md item 2 + PRD §7, SPEC.md item 3)
+// — mirrors welcome.js's role for welcome.html. Mounts the sidebar, renders the
+// empty-workspace state when there are no repos yet, wires "+"/"Add existing"/"Clone new"
+// and the drag-drop-onto-canvas shortcut, and mounts the real graph view for whichever repo
+// is active.
 
 import {
   getAppState,
@@ -13,9 +14,14 @@ import {
 import { renderSidebar } from "./sidebar.js";
 import { openCloneDialog } from "./clone-dialog.js";
 import { openRepoPickerDialog } from "./repo-picker-dialog.js";
+import { mountGraph } from "./graph-view.js";
 import { showToast } from "../components/toast.js";
 
-function renderGraphPlaceholder(canvas, appState) {
+function activeRepoPath(appState) {
+  return appState.mode === "repository" ? appState.repo_path : appState.active_repo;
+}
+
+async function renderGraphArea(canvas, appState) {
   if (appState.mode === "workspace" && appState.repos.length === 0) {
     canvas.innerHTML = `
       <div class="empty-state-card">
@@ -33,17 +39,22 @@ function renderGraphPlaceholder(canvas, appState) {
     canvas.querySelector("#empty-clone").addEventListener("click", handleCloneNew);
     return;
   }
-  canvas.innerHTML = `<div class="empty-state-hint">Graph view lands in SPEC.md item 3.</div>`;
+  const repoPath = activeRepoPath(appState);
+  if (!repoPath) {
+    canvas.innerHTML = `<div class="empty-state-hint">No active repository.</div>`;
+    return;
+  }
+  await mountGraph(canvas, repoPath);
 }
 
 async function refresh() {
   const appState = await getAppState();
-  renderSidebar(document.getElementById("sidebar"), appState, {
+  await renderSidebar(document.getElementById("sidebar"), appState, {
     onAddExisting: handleAddExisting,
     onCloneNew: handleCloneNew,
-    onSwitched: () => renderGraphPlaceholder(document.getElementById("graph-canvas"), appState),
+    onSwitched: (fresh) => renderGraphArea(document.getElementById("graph-canvas"), fresh),
   });
-  renderGraphPlaceholder(document.getElementById("graph-canvas"), appState);
+  await renderGraphArea(document.getElementById("graph-canvas"), appState);
   return appState;
 }
 

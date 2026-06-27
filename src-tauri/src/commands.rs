@@ -2,10 +2,18 @@
 
 use std::sync::Mutex;
 
+use crate::git::{self, Repo};
 use crate::recent::{self, RecentEntryView, RecentKind};
 use crate::state::{AppMode, AppState, AppStateView};
 use crate::workspace;
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
+
+/// Server-side cache for the active repo's commit graph (PRD §7) — keyed by repo path so a
+/// stale `get_graph_rows` call against a since-switched repo is rejected rather than silently
+/// served. Single-entry: Trunk is single-window/single-context, only one repo's graph is ever
+/// being viewed at a time (PRD §15).
+pub type GraphState = Mutex<Option<(String, git::GraphCache)>>;
 
 #[tauri::command]
 pub fn open_repository(
@@ -166,5 +174,111 @@ pub fn repo_quick_info(path: String) -> Result<workspace::RepoQuickInfo, String>
     workspace::repo_quick_info(&path)
 }
 
-// Reserved for future sessions: commit graph walk, diff/staging, branch/tag/stash/remote CRUD,
-// push/fetch/pull, interactive rebase, conflict resolution, terminal pty I/O (see git/terminal modules).
+// --- Commit graph (PRD §7, SPEC.md item 3) -------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct GraphMeta {
+    pub total_count: usize,
+    pub head_sha: Option<String>,
+    pub max_lane: u32,
+}
+
+/// Walks the repo once and caches the result; `get_graph_rows` only ever slices this cache.
+/// Must be called (again) after switching repos/branches change history — there's no
+/// file-watcher yet, so the frontend re-calls this on repo switch and on an explicit refresh.
+///
+/// `async` + `spawn_blocking` is load-bearing here, not just style: Tauri runs non-`async`
+/// commands on the main thread, which the webview shares — a large repo's walk took multiple
+/// seconds and froze the whole UI (no spinner could even paint) for that entire span. Moving
+/// the git2 work onto a blocking thread (same pattern `workspace::clone_repository` already
+/// uses) keeps the main thread free to service the webview while this runs.
+#[tauri::command]
+pub async fn open_graph(graph_state: State<'_, GraphState>, repo_path: String) -> Result<GraphMeta, String> {
+    let path_for_walk = repo_path.clone();
+    let cache = tauri::async_runtime::spawn_blocking(move || -> Result<git::GraphCache, String> {
+        let repo = Repo::open(&path_for_walk).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.build_graph().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let meta = GraphMeta {
+        total_count: cache.rows.len(),
+        head_sha: cache.head_sha.clone(),
+        max_lane: cache.max_lane,
+    };
+    *graph_state.lock().unwrap() = Some((repo_path, cache));
+    Ok(meta)
+}
+
+/// Slices the cached graph for the virtualised scroll window `[start, start+count)` and
+/// applies `filter` to just that slice — cheap filters (author/message/SHA/date) are O(1)
+/// per row from already-cached data; branch ancestry is an O(history) in-memory BFS; path
+/// filtering only opens a live repo handle and diffs trees for rows actually in this window,
+/// never the whole history (the perf-sensitive part of §7.3).
+#[tauri::command]
+pub fn get_graph_rows(
+    graph_state: State<'_, GraphState>,
+    repo_path: String,
+    start: usize,
+    count: usize,
+    filter: git::GraphFilter,
+) -> Result<Vec<git::GraphRow>, String> {
+    let mut guard = graph_state.lock().unwrap();
+    let (cached_path, cache) = guard
+        .as_mut()
+        .ok_or_else(|| "Graph not opened for this repo — call open_graph first.".to_string())?;
+    if cached_path != &repo_path {
+        return Err("Graph cache is for a different repository — call open_graph first.".into());
+    }
+
+    let end = (start + count).min(cache.rows.len());
+    if start >= end {
+        return Ok(Vec::new());
+    }
+
+    let branch_ancestors = filter.branch.as_deref().map(|b| cache.branch_ancestors(b));
+    let path_repo = if filter.path.is_some() {
+        git2::Repository::open(&repo_path).ok()
+    } else {
+        None
+    };
+
+    let rows = cache.rows[start..end]
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            let mut matched = git::matches_basic(&row, &filter);
+            if matched {
+                if let Some(ancestors) = &branch_ancestors {
+                    matched = ancestors.contains(&row.sha);
+                }
+            }
+            if matched {
+                if let (Some(path), Some(repo)) = (&filter.path, &path_repo) {
+                    matched = git::row_matches_path(repo, &row, path);
+                }
+            }
+            row.matches = matched;
+            row
+        })
+        .collect();
+    Ok(rows)
+}
+
+/// Local branches for the sidebar Branches section (PRD §4.2) — colour-hashed the same way
+/// as graph lanes (`git::BranchInfo::color_index`) so sidebar dots match the graph exactly.
+/// `async` + `spawn_blocking` for the same reason as `open_graph` — keeps a slow/large repo
+/// from blocking the main thread the webview shares.
+#[tauri::command]
+pub async fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.list_branches().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// Reserved for future sessions: diff/staging, branch/tag/stash/remote CRUD, push/fetch/pull,
+// interactive rebase, conflict resolution, terminal pty I/O (see git/terminal modules).

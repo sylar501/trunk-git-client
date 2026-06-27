@@ -207,11 +207,10 @@ async function renderRecentList() {
   }
 }
 
-// PRD §15.1 fast path is implemented (see openRecentEntry below) but disabled for now:
-// index.html is still an empty placeholder (PRD §7, Main graph view — SPEC.md item 3),
-// so skipping straight to it leaves no way back to Welcome short of deleting recent.json.
-// Re-enable once the graph view exists and can navigate back to Welcome on its own.
-const FAST_PATH_ENABLED = false;
+// PRD §15.1 fast path (see openRecentEntry below): index.html now has a real graph view
+// (PRD §7, SPEC.md item 3) to land on, and the sidebar's workspace/repo header offers a way
+// back here ("Open another repository or workspace…", see sidebar.js).
+const FAST_PATH_ENABLED = true;
 
 async function init() {
   const entries = await listRecent();

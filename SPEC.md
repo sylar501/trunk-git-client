@@ -89,7 +89,7 @@ for that session has been committed.
   - Empty workspace (§15.7): centred empty-state card (icon, "No repositories yet", green Add
     repository / blue Clone repository buttons, drag-folder hint).
 
-## 3. Main graph view (anchor) — §7
+## 3. [x] Main graph view (anchor) — §7 — Session 3
 
 - **Frontend**: `src/index.html`, `src/components/commit-row.js`, `src/components/sidebar-item.js`,
   `src/components/branch-pill.js`

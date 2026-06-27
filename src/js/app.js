@@ -62,3 +62,15 @@ export async function onDragDrop(handler) {
   const webview = window.__TAURI__.webview.getCurrentWebview();
   return webview.onDragDropEvent((event) => handler(event.payload));
 }
+
+export async function openGraph(repoPath) {
+  return invoke("open_graph", { repoPath });
+}
+
+export async function getGraphRows(repoPath, start, count, filter) {
+  return invoke("get_graph_rows", { repoPath, start, count, filter });
+}
+
+export async function listBranches(repoPath) {
+  return invoke("list_branches", { repoPath });
+}

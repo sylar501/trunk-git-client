@@ -13,6 +13,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(state::AppState::default()))
+        .manage(Mutex::new(None::<(String, git::GraphCache)>))
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
             commands::open_workspace,
@@ -26,6 +27,9 @@ fn main() {
             commands::add_existing_repository,
             commands::get_app_state,
             commands::repo_quick_info,
+            commands::open_graph,
+            commands::get_graph_rows,
+            commands::list_branches,
         ])
         .run(tauri::generate_context!())
         .expect("error while running trunk");
