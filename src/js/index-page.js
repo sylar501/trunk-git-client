@@ -10,15 +10,43 @@ import {
   detectNestedRepos,
   pickFolder,
   onDragDrop,
+  getSettings,
+  saveSettings,
 } from "./app.js";
 import { renderSidebar } from "./sidebar.js";
 import { openCloneDialog } from "./clone-dialog.js";
 import { openRepoPickerDialog } from "./repo-picker-dialog.js";
 import { mountGraph } from "./graph-view.js";
 import { showToast } from "../components/toast.js";
+import { attachResizeHandle } from "../components/resize-handle.js";
+
+const SIDEBAR_MIN_WIDTH = 120;
+const SIDEBAR_MAX_WIDTH = 360;
+
+// Populated from `getSettings()` before the first render (see `init()`) — drag-resizing either
+// panel updates this in place so a later re-render (e.g. switching repos) keeps using the
+// latest known width, not whatever was loaded at startup.
+let uiSettings = { sidebar_width: 156, commit_overlay_width: 264 };
 
 function activeRepoPath(appState) {
   return appState.mode === "repository" ? appState.repo_path : appState.active_repo;
+}
+
+function applySidebarWidth(width) {
+  document.getElementById("sidebar").style.width = `${width}px`;
+}
+
+function setupSidebarResize() {
+  attachResizeHandle(document.getElementById("sidebar-resize"), {
+    getWidth: () => uiSettings.sidebar_width,
+    setWidth: (w) => {
+      uiSettings.sidebar_width = w;
+      applySidebarWidth(w);
+    },
+    min: SIDEBAR_MIN_WIDTH,
+    max: SIDEBAR_MAX_WIDTH,
+    onResizeEnd: (finalWidth) => saveSettings({ sidebarWidth: finalWidth }),
+  });
 }
 
 async function renderGraphArea(canvas, appState) {
@@ -44,7 +72,19 @@ async function renderGraphArea(canvas, appState) {
     canvas.innerHTML = `<div class="empty-state-hint">No active repository.</div>`;
     return;
   }
-  await mountGraph(canvas, repoPath);
+  // One shared refresh path for every commit-detail-overlay mutation (PRD §4.3, SPEC.md item
+  // 4): cherry-pick/revert only need the graph re-walked, branch-from-here also needs the
+  // sidebar's branch list refreshed — `refresh()` already does both together, and the cost is
+  // dominated by the graph walk regardless, so there's no value in a narrower, action-specific
+  // refresh here.
+  await mountGraph(canvas, repoPath, {
+    onMutated: () => refresh(),
+    overlayWidth: uiSettings.commit_overlay_width,
+    onOverlayResize: (width) => {
+      uiSettings.commit_overlay_width = width;
+      saveSettings({ commitOverlayWidth: width });
+    },
+  });
 }
 
 async function refresh() {
@@ -97,6 +137,11 @@ async function setupDragDrop() {
 }
 
 async function init() {
+  // Awaited before the first render so the sidebar/overlay never flash at their default width
+  // before snapping to the persisted one — a local settings-file read is near-instant.
+  uiSettings = await getSettings().catch(() => uiSettings);
+  applySidebarWidth(uiSettings.sidebar_width);
+  setupSidebarResize();
   await refresh();
   await setupDragDrop().catch(() => {});
 }

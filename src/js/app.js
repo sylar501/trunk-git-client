@@ -74,3 +74,31 @@ export async function getGraphRows(repoPath, start, count, filter) {
 export async function listBranches(repoPath) {
   return invoke("list_branches", { repoPath });
 }
+
+export async function getCommitDetail(repoPath, sha) {
+  return invoke("get_commit_detail", { repoPath, sha });
+}
+
+export async function getCommitFileDiff(repoPath, sha, filePath) {
+  return invoke("get_commit_file_diff", { repoPath, sha, filePath });
+}
+
+export async function cherryPickCommit(repoPath, sha) {
+  return invoke("cherry_pick_commit", { repoPath, sha });
+}
+
+export async function revertCommit(repoPath, sha) {
+  return invoke("revert_commit", { repoPath, sha });
+}
+
+export async function createBranchAt(repoPath, sha, name) {
+  return invoke("create_branch_at", { repoPath, sha, name });
+}
+
+export async function getSettings() {
+  return invoke("get_settings");
+}
+
+export async function saveSettings({ sidebarWidth, commitOverlayWidth } = {}) {
+  return invoke("save_settings", { sidebarWidth, commitOverlayWidth });
+}

@@ -1,10 +1,18 @@
 // Main graph view page controller (PRD §7, SPEC.md item 3) — mounted into `#graph-canvas`
-// by `index-page.js`. Owns the toolbar/filter bar and the virtualised, recycled-row scroll
-// container. Deliberately does NOT open a commit-detail overlay on row click (that's item 4)
-// and does NOT wire the "rebase" toolbar button (item 10) — both are visual-only here.
+// by `index-page.js`. Owns the toolbar/filter bar, the virtualised, recycled-row scroll
+// container, and (SPEC.md item 4, PRD §4.3) the commit-detail overlay's open/update/dismiss
+// wiring and its cherry-pick/revert/branch-from-here actions. Deliberately does NOT wire the
+// "rebase" toolbar button (that's item 10) — still visual-only here.
 
-import { openGraph, getGraphRows } from "./app.js";
+import { openGraph, getGraphRows, cherryPickCommit, revertCommit } from "./app.js";
 import { createCommitRow, laneColumnWidth } from "../components/commit-row.js";
+import { createCommitOverlay } from "../components/commit-overlay.js";
+import { openCreateBranchDialog } from "./create-branch-dialog.js";
+import { showToast } from "../components/toast.js";
+import { attachResizeHandle } from "../components/resize-handle.js";
+
+const OVERLAY_MIN_WIDTH = 220;
+const OVERLAY_MAX_WIDTH = 480;
 
 const ROW_HEIGHT = 28; // px — mirrors --row-height; the 22-36px slider is item 14
 const OVERSCAN = 10;
@@ -18,8 +26,28 @@ function debounce(fn, ms) {
   };
 }
 
-/** @param {HTMLElement} canvas */
-export async function mountGraph(canvas, repoPath) {
+/**
+ * @param {HTMLElement} canvas
+ * @param {{
+ *   onMutated?: () => Promise<void> | void,
+ *   overlayWidth?: number - persisted commit-overlay width (px) from `getSettings()`,
+ *     defaults to 264 if not supplied.
+ *   onOverlayResize?: (width: number) => void - fired once per completed drag (not per
+ *     mousemove) so the caller can persist it via `saveSettings()`.
+ * }} opts - `onMutated` is called after a successful cherry-pick/revert/branch-from-here so the
+ *   caller can refresh sidebar+graph together (see `index-page.js`) — one shared refresh path
+ *   for all three, rather than this module guessing which mutation needs which slice of a
+ *   refresh.
+ */
+export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: initialOverlayWidth, onOverlayResize } = {}) {
+  // `mountGraph` can be called again on the same `canvas` (every refresh remounts) — abort the
+  // previous call's document-level listeners (Escape, outside-click) before attaching new ones,
+  // since those aren't scoped to anything `canvas.innerHTML` below would otherwise clean up.
+  canvas._cdoAbortController?.abort();
+  const abortController = new AbortController();
+  canvas._cdoAbortController = abortController;
+  const { signal } = abortController;
+
   canvas.innerHTML = `
     <div class="graph-toolbar">
       <input class="search-input" id="g-search" placeholder="filter commits…" />
@@ -47,6 +75,105 @@ export async function mountGraph(canvas, repoPath) {
   const authorInput = canvas.querySelector("#f-author");
   const branchInput = canvas.querySelector("#f-branch");
   const pathInput = canvas.querySelector("#f-path");
+
+  // Commit detail overlay (PRD §4.3, SPEC.md item 4) — a sibling of `sizer`, not a child of it,
+  // so it pins to `body`'s visible viewport instead of scrolling away with the recycled row
+  // pool (see commit-overlay.js's own header comment for the full reasoning).
+  async function onCherryPick({ sha }) {
+    try {
+      await cherryPickCommit(repoPath, sha);
+      showToast({ variant: "success", message: "Commit cherry-picked." });
+      await onMutated?.();
+    } catch (err) {
+      showToast({ variant: "danger", message: String(err) });
+    }
+  }
+
+  async function onRevert({ sha }) {
+    try {
+      await revertCommit(repoPath, sha);
+      showToast({ variant: "success", message: "Commit reverted." });
+      await onMutated?.();
+    } catch (err) {
+      showToast({ variant: "danger", message: String(err) });
+    }
+  }
+
+  // Deliberately not `await`ed below the dialog-open call: `openCreateBranchDialog` only
+  // resolves on success and never on cancel (same convention as `openCloneDialog`), so awaiting
+  // it here would leave the overlay's own buttons disabled forever if the user cancels — the
+  // overlay should only stay disabled for the brief synchronous "open the dialog" step.
+  async function onBranchFromHere({ sha, shortSha, summary }) {
+    openCreateBranchDialog({ sha, shortSha, summary, repoPath })
+      .then(async (result) => {
+        if (!result?.created) return;
+        showToast({ variant: "success", message: "Branch created." });
+        await onMutated?.();
+      })
+      .catch((err) => {
+        showToast({ variant: "danger", message: String(err) });
+      });
+  }
+
+  const overlay = createCommitOverlay({ onCherryPick, onRevert, onBranchFromHere });
+  let overlayWidth = initialOverlayWidth || 264;
+  overlay.el.style.width = `${overlayWidth}px`;
+  body.append(overlay.el);
+
+  // `.cdo` is `position:fixed` (see components.css) — its on-screen rect is computed here from
+  // `body`'s own measured box, rather than via CSS `top/right/bottom` against `body` as the
+  // containing block, which measurably tracked scroll position instead of staying pinned on the
+  // Linux/WebKitGTK build. Re-synced on every resize of `body` (covers window resize and the
+  // filters bar toggling, which changes `body`'s height/top within the toolbar's flex column).
+  function syncOverlayPosition() {
+    const rect = body.getBoundingClientRect();
+    overlay.el.style.top = `${rect.top}px`;
+    overlay.el.style.height = `${rect.height}px`;
+    overlay.el.style.left = `${rect.right - overlayWidth}px`;
+  }
+  syncOverlayPosition();
+  const positionObserver = new ResizeObserver(syncOverlayPosition);
+  positionObserver.observe(body);
+  signal.addEventListener("abort", () => positionObserver.disconnect());
+
+  // Handle is on the overlay's *left* edge, so dragging left (not right) grows it — `invert`.
+  attachResizeHandle(overlay.el.querySelector(".cdo-resize-handle"), {
+    getWidth: () => overlayWidth,
+    setWidth: (w) => {
+      overlayWidth = w;
+      overlay.el.style.width = `${w}px`;
+      syncOverlayPosition();
+    },
+    min: OVERLAY_MIN_WIDTH,
+    max: OVERLAY_MAX_WIDTH,
+    invert: true,
+    onResizeEnd: (finalWidth) => onOverlayResize?.(finalWidth),
+    signal,
+  });
+
+  // Centralised here (not self-attached inside commit-overlay.js) because closing on *any*
+  // outside click would race with clicking a different commit row: mousedown fires before
+  // click, so a naive overlay-owned listener would close it before this module's own `.crow`
+  // click handler (below) gets a chance to just update the overlay's contents in place.
+  // Capture-phase to match `dialog.js`/`context-menu.js`'s existing convention.
+  document.addEventListener(
+    "mousedown",
+    (e) => {
+      if (!overlay.isOpen()) return;
+      if (overlay.el.contains(e.target)) return;
+      if (e.target.closest(".crow")) return;
+      overlay.close();
+    },
+    { capture: true, signal }
+  );
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape" || !overlay.isOpen()) return;
+      overlay.close();
+    },
+    { capture: true, signal }
+  );
 
   let totalCount = 0;
   let filter = {};
@@ -147,6 +274,7 @@ export async function mountGraph(canvas, repoPath) {
     if (!rowEl) return;
     selectedIndex = Number(rowEl.dataset.index);
     renderWindow();
+    overlay.open(rowEl.dataset.sha, repoPath);
   });
 
   function scrollToIndex(index) {
@@ -161,15 +289,29 @@ export async function mountGraph(canvas, repoPath) {
     }
   }
 
+  // Arrow keys only ever move `selectedIndex` — they deliberately never open or update the
+  // overlay, even if one is already open. Enter/Space is the separate, explicit "open commit
+  // detail" trigger. This is the literal reading of PRD §6's keyboard-profile table, which
+  // lists "Navigate commits" (↑↓) and "Open commit detail" (Enter/Space) as two separate rows,
+  // not arrow-navigation implicitly opening/following with the overlay.
   body.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
-    const delta = e.key === "ArrowDown" ? 1 : -1;
-    const base = selectedIndex < 0 ? firstIndex : selectedIndex;
-    selectedIndex = Math.max(0, Math.min(totalCount - 1, base + delta));
-    scrollToIndex(selectedIndex);
-    firstIndex = Math.max(0, Math.floor(body.scrollTop / ROW_HEIGHT) - OVERSCAN);
-    loadWindow(firstIndex);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const base = selectedIndex < 0 ? firstIndex : selectedIndex;
+      selectedIndex = Math.max(0, Math.min(totalCount - 1, base + delta));
+      scrollToIndex(selectedIndex);
+      firstIndex = Math.max(0, Math.floor(body.scrollTop / ROW_HEIGHT) - OVERSCAN);
+      loadWindow(firstIndex);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      if (selectedIndex < 0) return;
+      const row = cache.rows[selectedIndex - cache.start];
+      if (!row) return; // selection raced ahead of the in-flight window load — no-op, not a crash
+      e.preventDefault();
+      overlay.open(row.sha, repoPath);
+    }
   });
 
   const reloadFiltered = debounce(() => loadWindow(cache.start), DEBOUNCE_MS);

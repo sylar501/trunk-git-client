@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use crate::git::{self, Repo};
 use crate::recent::{self, RecentEntryView, RecentKind};
+use crate::settings::{self, AppSettings};
 use crate::state::{AppMode, AppState, AppStateView};
 use crate::workspace;
 use serde::Serialize;
@@ -280,5 +281,80 @@ pub async fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, St
     .map_err(|e| e.to_string())?
 }
 
-// Reserved for future sessions: diff/staging, branch/tag/stash/remote CRUD, push/fetch/pull,
+// --- Commit detail overlay (PRD §4.3, SPEC.md item 4) -------------------------------------
+
+/// `async` + `spawn_blocking` for the same reason as `open_graph`/`list_branches` — keeps the
+/// main thread free to service the webview regardless of how large the commit's diff turns out
+/// to be, matching the established convention rather than judging this command's workload alone.
+#[tauri::command]
+pub async fn get_commit_detail(repo_path: String, sha: String) -> Result<git::CommitDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.commit_detail(&sha).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_commit_file_diff(
+    repo_path: String,
+    sha: String,
+    file_path: String,
+) -> Result<Vec<git::DiffLineRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.commit_file_diff(&sha, &file_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn cherry_pick_commit(repo_path: String, sha: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.cherry_pick(&sha)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn revert_commit(repo_path: String, sha: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.revert_commit(&sha)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn create_branch_at(repo_path: String, sha: String, name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.create_branch_at(&sha, &name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// --- App-level settings (sidebar/commit-overlay drag-resize widths) -----------------------
+
+#[tauri::command]
+pub fn get_settings(app: AppHandle) -> AppSettings {
+    settings::load(&app)
+}
+
+#[tauri::command]
+pub fn save_settings(
+    app: AppHandle,
+    sidebar_width: Option<f64>,
+    commit_overlay_width: Option<f64>,
+) -> Result<(), String> {
+    settings::save(&app, sidebar_width, commit_overlay_width)
+}
+
+// Reserved for future sessions: staging, branch/tag/stash/remote CRUD, push/fetch/pull,
 // interactive rebase, conflict resolution, terminal pty I/O (see git/terminal modules).

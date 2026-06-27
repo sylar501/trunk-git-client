@@ -32,6 +32,26 @@ impl Repo {
     pub fn list_branches(&self) -> Result<Vec<BranchInfo>, git2::Error> {
         list_branches(&self.inner)
     }
+
+    pub fn commit_detail(&self, sha: &str) -> Result<CommitDetail, git2::Error> {
+        commit_detail(&self.inner, sha)
+    }
+
+    pub fn commit_file_diff(&self, sha: &str, file_path: &str) -> Result<Vec<DiffLineRow>, git2::Error> {
+        commit_file_diff(&self.inner, sha, file_path)
+    }
+
+    pub fn cherry_pick(&self, sha: &str) -> Result<String, String> {
+        cherry_pick(&self.inner, sha)
+    }
+
+    pub fn revert_commit(&self, sha: &str) -> Result<String, String> {
+        revert_commit(&self.inner, sha)
+    }
+
+    pub fn create_branch_at(&self, sha: &str, name: &str) -> Result<(), String> {
+        create_branch_at(&self.inner, sha, name)
+    }
 }
 
 // --- Wire types (PRD §7.1) -----------------------------------------------------------------
@@ -474,6 +494,289 @@ fn build_graph(repo: &Repository) -> Result<GraphCache, git2::Error> {
     })
 }
 
+// --- Commit detail (PRD §4.3, SPEC.md item 4) ------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitFileChange {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitDetail {
+    pub sha: String,
+    pub short_sha: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub summary: String,
+    pub time: i64,
+    pub parents: Vec<String>,
+    pub files: Vec<CommitFileChange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffLineKind {
+    Context,
+    Addition,
+    Deletion,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffLineRow {
+    pub kind: DiffLineKind,
+    pub old_lineno: Option<u32>,
+    pub new_lineno: Option<u32>,
+    pub content: String,
+}
+
+/// Mainline-only (parent 0) base tree for diffing a commit against its predecessor — same
+/// merge-commit convention `row_matches_path` above already uses, applied here for the
+/// overlay's file list/diff display. `None` for root commits (diff against an empty tree).
+/// This is purely a *display* convention and is independent of `cherry_pick`/`revert_commit`
+/// below, which refuse merge commits outright rather than guessing a mainline for an action.
+fn diff_base_tree<'a>(commit: &git2::Commit<'a>) -> Result<Option<git2::Tree<'a>>, git2::Error> {
+    match commit.parent(0) {
+        Ok(parent) => Ok(Some(parent.tree()?)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Maps a `DiffLine::origin()` char to a kind, or `None` to skip the line entirely — covers
+/// hunk/file headers and "no newline at end of file" annotation lines (`=`/`>`/`<`), neither of
+/// which represents real file content worth a row in the overlay's diff view.
+fn line_kind(origin: char) -> Option<DiffLineKind> {
+    match origin {
+        '+' => Some(DiffLineKind::Addition),
+        '-' => Some(DiffLineKind::Deletion),
+        ' ' => Some(DiffLineKind::Context),
+        _ => None,
+    }
+}
+
+fn delta_path(delta: &git2::DiffDelta) -> Option<String> {
+    delta
+        .new_file()
+        .path()
+        .or_else(|| delta.old_file().path())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Per-file +/- counts (PRD §4.3's changed-files list) via a line-callback tally, then assembled
+/// in `diff.deltas()`'s natural order so the file list matches git's own ordering.
+fn diff_file_stats(diff: &git2::Diff) -> Result<Vec<CommitFileChange>, git2::Error> {
+    let mut counts: HashMap<String, (u32, u32)> = HashMap::new();
+    diff.foreach(
+        &mut |_delta, _progress| true,
+        None,
+        None,
+        Some(&mut |delta, _hunk, line| {
+            let Some(path) = delta_path(&delta) else { return true };
+            let entry = counts.entry(path).or_insert((0, 0));
+            match line_kind(line.origin()) {
+                Some(DiffLineKind::Addition) => entry.0 += 1,
+                Some(DiffLineKind::Deletion) => entry.1 += 1,
+                _ => {}
+            }
+            true
+        }),
+    )?;
+
+    let mut files = Vec::new();
+    for delta in diff.deltas() {
+        let Some(path) = delta_path(&delta) else { continue };
+        let (additions, deletions) = counts.get(&path).copied().unwrap_or((0, 0));
+        files.push(CommitFileChange { path, additions, deletions });
+    }
+    Ok(files)
+}
+
+fn commit_detail(repo: &Repository, sha: &str) -> Result<CommitDetail, git2::Error> {
+    let oid = Oid::from_str(sha)?;
+    let commit = repo.find_commit(oid)?;
+    let tree = commit.tree()?;
+    let base_tree = diff_base_tree(&commit)?;
+    let diff = repo.diff_tree_to_tree(base_tree.as_ref(), Some(&tree), None)?;
+    let files = diff_file_stats(&diff)?;
+
+    let author = commit.author();
+    let sha_string = oid.to_string();
+    let short_sha = sha_string[..7.min(sha_string.len())].to_string();
+    Ok(CommitDetail {
+        sha: sha_string,
+        short_sha,
+        author_name: author.name().unwrap_or_default().to_string(),
+        author_email: author.email().unwrap_or_default().to_string(),
+        summary: commit.summary().unwrap_or_default().to_string(),
+        time: commit.time().seconds(),
+        parents: commit.parent_ids().map(|p| p.to_string()).collect(),
+        files,
+    })
+}
+
+/// Unified diff for one file within a commit, scoped via `DiffOptions::pathspec` (same pattern
+/// `diff_touches_path` above already uses) — `diff.foreach`'s line callback already carries the
+/// delta per line, so no separate `file_cb` bookkeeping is needed for a single-file diff.
+fn commit_file_diff(repo: &Repository, sha: &str, file_path: &str) -> Result<Vec<DiffLineRow>, git2::Error> {
+    let oid = Oid::from_str(sha)?;
+    let commit = repo.find_commit(oid)?;
+    let tree = commit.tree()?;
+    let base_tree = diff_base_tree(&commit)?;
+    let mut opts = git2::DiffOptions::new();
+    opts.pathspec(file_path);
+    let diff = repo.diff_tree_to_tree(base_tree.as_ref(), Some(&tree), Some(&mut opts))?;
+
+    let mut lines = Vec::new();
+    diff.foreach(
+        &mut |_delta, _progress| true,
+        None,
+        None,
+        Some(&mut |_delta, _hunk, line| {
+            if let Some(kind) = line_kind(line.origin()) {
+                let content = String::from_utf8_lossy(line.content())
+                    .trim_end_matches('\n')
+                    .to_string();
+                lines.push(DiffLineRow {
+                    kind,
+                    old_lineno: line.old_lineno(),
+                    new_lineno: line.new_lineno(),
+                    content,
+                });
+            }
+            true
+        }),
+    )?;
+    Ok(lines)
+}
+
+/// Working tree must be clean before `cherry_pick`/`revert_commit` start — both write results
+/// into the index *and* the working directory, so recovering from a conflict means resetting
+/// both back to HEAD (see `abort_in_progress_operation`). That reset is only safe if HEAD's tree
+/// really was the pre-operation state; this precheck guarantees that rather than risking
+/// collateral damage to unrelated uncommitted work.
+fn is_working_tree_clean(repo: &Repository) -> Result<bool, git2::Error> {
+    Ok(repo.statuses(None)?.is_empty())
+}
+
+/// Resets index+workdir to HEAD and clears the in-progress cherry-pick/revert state — the same
+/// outcome as `git cherry-pick --abort`/`git revert --abort` (which are themselves implemented
+/// as exactly this: libgit2 exposes no separate "abort" primitive for a single `cherrypick()`/
+/// `revert()` call). Only called once `is_working_tree_clean` has already confirmed HEAD is the
+/// true pre-operation state, so nothing unrelated is at risk.
+fn abort_in_progress_operation(repo: &Repository) -> Result<(), git2::Error> {
+    let head_commit = repo.head()?.peel_to_commit()?;
+    let mut checkout_opts = git2::build::CheckoutBuilder::new();
+    checkout_opts.force();
+    repo.reset(head_commit.as_object(), git2::ResetType::Hard, Some(&mut checkout_opts))?;
+    repo.cleanup_state()
+}
+
+/// Cherry-picks a single commit onto HEAD. Refuses merge commits outright (matching plain `git
+/// cherry-pick`'s own default refusal without `-m` — libgit2 hard-errors rather than defaulting
+/// to a mainline if one isn't specified) and refuses a dirty working tree (see
+/// `is_working_tree_clean`) before calling into libgit2 at all. Returns the new commit's SHA.
+fn cherry_pick(repo: &Repository, sha: &str) -> Result<String, String> {
+    let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
+    let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+    if commit.parent_count() > 1 {
+        return Err("Cherry-picking a merge commit isn't supported yet.".to_string());
+    }
+    if !is_working_tree_clean(repo).map_err(|e| e.to_string())? {
+        return Err("Commit or stash your changes before cherry-picking.".to_string());
+    }
+    let head_commit = repo
+        .head()
+        .map_err(|e| e.to_string())?
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?;
+
+    repo.cherrypick(&commit, None).map_err(|e| e.to_string())?;
+
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    if index.has_conflicts() {
+        abort_in_progress_operation(repo).map_err(|e| e.to_string())?;
+        return Err(
+            "This commit can't be cherry-picked without conflicts. The operation was cancelled and your working tree is unchanged."
+                .to_string(),
+        );
+    }
+
+    let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
+    let tree = repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
+    let author = commit.author();
+    let committer = repo.signature().map_err(|e| e.to_string())?;
+    let message = commit.message().unwrap_or_default();
+    let new_oid = repo
+        .commit(Some("HEAD"), &author, &committer, message, &tree, &[&head_commit])
+        .map_err(|e| e.to_string())?;
+    repo.cleanup_state().map_err(|e| e.to_string())?;
+    Ok(new_oid.to_string())
+}
+
+/// Reverts a single commit on top of HEAD with a new commit (author = committer = current user,
+/// message matches plain `git revert`'s default format). Same merge-commit and dirty-tree
+/// upfront refusals, and the same conflict-abort shape, as `cherry_pick` above.
+fn revert_commit(repo: &Repository, sha: &str) -> Result<String, String> {
+    let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
+    let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+    if commit.parent_count() > 1 {
+        return Err("Reverting a merge commit isn't supported yet.".to_string());
+    }
+    if !is_working_tree_clean(repo).map_err(|e| e.to_string())? {
+        return Err("Commit or stash your changes before reverting.".to_string());
+    }
+    let head_commit = repo
+        .head()
+        .map_err(|e| e.to_string())?
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?;
+
+    repo.revert(&commit, None).map_err(|e| e.to_string())?;
+
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    if index.has_conflicts() {
+        abort_in_progress_operation(repo).map_err(|e| e.to_string())?;
+        return Err(
+            "Reverting this commit causes conflicts. The operation was cancelled and your working tree is unchanged."
+                .to_string(),
+        );
+    }
+
+    let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
+    let tree = repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
+    let sig = repo.signature().map_err(|e| e.to_string())?;
+    let message = format!(
+        "Revert \"{}\"\n\nThis reverts commit {}.\n",
+        commit.summary().unwrap_or_default(),
+        oid
+    );
+    let new_oid = repo
+        .commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&head_commit])
+        .map_err(|e| e.to_string())?;
+    repo.cleanup_state().map_err(|e| e.to_string())?;
+    Ok(new_oid.to_string())
+}
+
+/// Creates a branch at `sha` and checks it out — deliberately a minimal placeholder (no
+/// real-time name validation, no starting-point picker) ahead of SPEC.md item 8's full "Create
+/// Branch" dialog. `repo.branch(..., force: false)` surfaces git2's natural duplicate-name error
+/// rather than silently overwriting; `checkout_head(None)` uses libgit2's default *non-forced*
+/// safety checks, so a conflicting dirty working tree fails loudly instead of being clobbered.
+fn create_branch_at(repo: &Repository, sha: &str, name: &str) -> Result<(), String> {
+    let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
+    let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+    let branch = repo.branch(name, &commit, false).map_err(|e| e.to_string())?;
+    let refname = branch
+        .get()
+        .name()
+        .ok_or_else(|| "Created branch has an invalid reference name.".to_string())?
+        .to_string();
+    repo.set_head(&refname).map_err(|e| e.to_string())?;
+    repo.checkout_head(None).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +808,28 @@ mod tests {
             index.write_tree().unwrap()
         };
         let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, parents)
+            .unwrap()
+    }
+
+    /// Like `commit()` above, but actually writes `file_name` to the working directory first —
+    /// needed for commit-detail/diff tests, which (unlike the graph-walk tests) need real file
+    /// content to diff against, not just empty-tree commits.
+    fn commit_with_file(
+        repo: &Repository,
+        dir: &std::path::Path,
+        message: &str,
+        parents: &[&git2::Commit],
+        file_name: &str,
+        content: &str,
+    ) -> Oid {
+        std::fs::write(dir.join(file_name), content).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new(file_name)).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = repo.signature().unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, parents)
             .unwrap()
     }
@@ -586,6 +911,76 @@ mod tests {
         let ancestors = cache.branch_ancestors(&branch_name);
         assert!(ancestors.contains(&c1.to_string()));
         assert!(ancestors.contains(&c2.to_string()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn commit_detail_reports_per_file_add_delete_counts() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "add a", &[], "a.txt", "one\ntwo\nthree\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let c2 = commit_with_file(&repo, &dir, "change a", &[&c1_commit], "a.txt", "one\nTWO\nthree\nfour\n");
+
+        let root_detail = commit_detail(&repo, &c1.to_string()).unwrap();
+        assert_eq!(root_detail.files.len(), 1);
+        assert_eq!(root_detail.files[0].path, "a.txt");
+        assert_eq!(root_detail.files[0].additions, 3, "root commit: every line is an addition");
+        assert_eq!(root_detail.files[0].deletions, 0);
+
+        let child_detail = commit_detail(&repo, &c2.to_string()).unwrap();
+        assert_eq!(child_detail.files.len(), 1);
+        assert_eq!(child_detail.files[0].additions, 2, "\"TWO\" + \"four\"");
+        assert_eq!(child_detail.files[0].deletions, 1, "\"two\"");
+
+        let diff_lines = commit_file_diff(&repo, &c2.to_string(), "a.txt").unwrap();
+        assert!(diff_lines
+            .iter()
+            .any(|l| l.kind == DiffLineKind::Addition && l.content == "TWO"));
+        assert!(diff_lines
+            .iter()
+            .any(|l| l.kind == DiffLineKind::Deletion && l.content == "two"));
+        assert!(diff_lines
+            .iter()
+            .any(|l| l.kind == DiffLineKind::Context && l.content == "one"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cherry_pick_and_revert_reject_merge_commits() {
+        let (dir, repo) = temp_repo();
+        let base = commit(&repo, "base", &[]);
+        let base_commit = repo.find_commit(base).unwrap();
+        let main_tip = commit(&repo, "main work", &[&base_commit]);
+        let main_tip_commit = repo.find_commit(main_tip).unwrap();
+
+        // Committed onto a separate ref, not HEAD — `repo.commit(Some("HEAD"), ...)` requires
+        // the new commit's first parent to match HEAD's *current* tip (same constraint the
+        // existing `build_graph_on_merge_...` test above already works around the same way),
+        // and `base_commit` isn't `main_tip`.
+        let feature_tip = {
+            let sig = repo.signature().unwrap();
+            let tree_oid = repo.index().unwrap().write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            repo.commit(Some("refs/heads/feature"), &sig, &sig, "feature work", &tree, &[&base_commit])
+                .unwrap()
+        };
+        let feature_tip_commit = repo.find_commit(feature_tip).unwrap();
+        let merge_oid = commit(&repo, "merge feature", &[&main_tip_commit, &feature_tip_commit]);
+        let merge_sha = merge_oid.to_string();
+
+        assert!(cherry_pick(&repo, &merge_sha).is_err(), "cherry-pick must refuse a merge commit");
+        assert!(revert_commit(&repo, &merge_sha).is_err(), "revert must refuse a merge commit");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn is_working_tree_clean_detects_untracked_file() {
+        let (dir, repo) = temp_repo();
+        assert!(is_working_tree_clean(&repo).unwrap());
+        std::fs::write(dir.join("untracked.txt"), "stray").unwrap();
+        assert!(!is_working_tree_clean(&repo).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

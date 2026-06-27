@@ -108,7 +108,7 @@ for that session has been committed.
   - Re-enable the Welcome screen's fast path (`FAST_PATH_ENABLED` in `src/js/welcome.js`,
     disabled in item 1) now that this view exists and gives the user somewhere real to land.
 
-## 4. Commit detail overlay — §4.3
+## 4. [x] Commit detail overlay — §4.3 — Session 4
 
 - **Frontend**: overlay component (right-side, 264px), reuses `diff-line.js`
 - **Backend**: commit metadata + diff fetch for a single commit, cherry-pick/revert/branch-here commands
@@ -321,6 +321,13 @@ for that session has been committed.
   10. Updates — auto-check toggle, update channel dropdown, current version row + "Check now"
       blue button.
   - Footer: neutral Cancel / blue Save. Opened via ⌘, / Ctrl+, / toolbar button / sidebar item.
+  - **Note (added alongside item 4's follow-up):** the sidebar width and commit-detail-overlay
+    width are user-adjustable by drag (not through this screen — no slider/field for either) and
+    are already persisted in `src-tauri/src/settings/mod.rs`'s `AppSettings` struct, written to
+    `settings.json` in the app config dir. This struct is meant to be the *same* one this item's
+    backend reads/writes for the 10 categories above — extend it, don't introduce a second
+    settings file — and its read/write here must not clobber `sidebar_width`/
+    `commit_overlay_width` in the process.
 
 ## 15. ~~Clone dialog (+ nested-repo detection) — §15.2, §15.5–15.6~~ — merged into items 1 & 2
 
