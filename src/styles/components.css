@@ -1007,3 +1007,313 @@ textarea,
 .dline.dd .dc {
   color: var(--red);
 }
+
+/* Interactive staging gutter dot (`diff-line.js`'s optional `staging` mode) — extends `.dline`'s
+   existing grid by one column. Only addition/deletion rows ever get one (context lines aren't
+   stageable). */
+.dstage {
+  width: 12px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.38;
+}
+
+.dstage.staged {
+  color: var(--green);
+  opacity: 1;
+}
+
+/* Blue-outline button (PRD §5) — secondary constructive, currently only used by the staging
+   view's commit button once amend is toggled on (see commit-panel.js). */
+.btn-blue-outline {
+  background: var(--btn-blue-outline-bg);
+  border-color: var(--btn-blue-outline-border);
+  color: var(--blue);
+}
+
+/* Generic checkbox-row label (clone-dialog.js's "also create a workspace" row inlines its own
+   flex styles; this is the shared version for new call sites — commit-panel.js's amend/SSH-
+   sign/push-after rows). */
+.cb-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.cb-opt input:disabled {
+  cursor: not-allowed;
+}
+
+/* Small monospace key-hint pill (the staging view's "← history" exit button's "Esc" badge). */
+.kbd-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  border: 0.5px solid var(--border-default);
+  color: var(--text-tertiary);
+  margin-left: 4px;
+}
+
+/* ── staging view (PRD §4.4, §8, SPEC.md item 5) ───────────────────────
+   Three fixed-width columns: file list (196px) / hunk diff (flexible centre) / commit panel
+   (214px) — no drag-resize, unlike the commit overlay (see staging-view.js's header comment). */
+
+.stg-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.stg-topbar {
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-bottom: 0.5px solid var(--border-subtle);
+  background: var(--bg-primary);
+}
+
+.stg-columns {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.stg-files-col {
+  /* Width set via JS inline style (drag-resizable — see staging-view.js's resize-handle
+     wiring and SPEC.md's "Resizable panels" note), not a CSS literal. */
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+}
+
+.stg-diff-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.stg-diff-hdr {
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 0.5px solid var(--border-subtle);
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.stg-diff-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.stg-panel-col {
+  width: 214px;
+  flex-shrink: 0;
+  border-left: 0.5px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  overflow-y: auto;
+}
+
+/* File list (left column) */
+
+.sf-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border-bottom: 0.5px solid var(--border-subtle);
+}
+
+.sf-hdr-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Compact button variant for the file-list header's two "all" actions, which sit side by side
+   in a column as narrow as 140px (`FILES_MIN_WIDTH`) — too tight for the standard 26px-tall
+   button. Reuses the semantic colour classes, just smaller. */
+.sf-btn-sm {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 9px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.sf-rows {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  border-bottom: 0.5px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.sf-row:hover {
+  background: var(--bg-raised);
+}
+
+.sf-row.sel {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+
+.sf-badge {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.sf-badge.added {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.sf-badge.modified {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.sf-badge.deleted {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.sf-fn {
+  flex: 1;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-add {
+  color: var(--green);
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.sf-del {
+  color: var(--red);
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+/* Hunk diff (centre column) */
+
+.shunk {
+  margin: 0 0 12px;
+}
+
+.shunk-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-tertiary);
+  border-top: 0.5px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
+}
+
+.shunk-text {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.shunk-btn {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 9px;
+}
+
+/* Commit panel (right column) */
+
+.sc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.sc-textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  background: var(--bg-tertiary);
+  border: 0.5px solid var(--border-default);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 6px 8px;
+}
+
+.sc-stats {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.sc-meta {
+  border-top: 0.5px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.sc-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  margin-bottom: 3px;
+}
+
+.sc-lbl {
+  color: var(--text-tertiary);
+}
+
+.sc-val {
+  color: var(--text-secondary);
+}
+
+.sc-commit {
+  width: 100%;
+  justify-content: center;
+}

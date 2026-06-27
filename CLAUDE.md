@@ -13,8 +13,8 @@ Primary differentiator: raw performance on large repositories.
 - Credential storage: OS-native (Keychain / DPAPI / Secret Service)
 
 ## Key docs (read when relevant, not upfront)
-- Full feature spec: trunk-requirements-3.md (PRD v2.0, "Final" — 25 sections, §1–§25).
-- Component library & dark theme palette: trunk-claude-design-briefing.md, plus the
+- Full feature spec: trunk-requirements-3.docx (PRD v2.0, "Final" — 25 sections, §1–§25).
+- Component library & dark theme palette: trunk-claude-design-briefing.docx, plus the
   single-page visual reference in "Trunk Component Library.pdf"
 - UI screens: see screenshot_*.html files in docs/
 
@@ -55,3 +55,10 @@ Terminal is a bottom drawer toggled with Cmd+` — overlays from below.
 cargo build --manifest-path src-tauri/Cargo.toml
 cargo tauri dev
 cargo test --manifest-path src-tauri/Cargo.toml
+
+## SPEC.md completion (mandatory)
+Never mark a SPEC.md item `[x]` (or add a "— Session N" suffix) yourself, even after
+implementing and testing it. The user verifies a session's work first and tells you
+explicitly when to mark it complete. Implementation work for a session may freely update
+that item's bullet text (file lists, acceptance-criteria wording, etc.) — just leave the
+`[x]`/Session-number marker alone until told.

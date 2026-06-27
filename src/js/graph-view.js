@@ -4,7 +4,7 @@
 // wiring and its cherry-pick/revert/branch-from-here actions. Deliberately does NOT wire the
 // "rebase" toolbar button (that's item 10) — still visual-only here.
 
-import { openGraph, getGraphRows, cherryPickCommit, revertCommit } from "./app.js";
+import { openGraph, getGraphRows, cherryPickCommit, revertCommit, getWorkingTreeStatus } from "./app.js";
 import { createCommitRow, laneColumnWidth } from "../components/commit-row.js";
 import { createCommitOverlay } from "../components/commit-overlay.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
@@ -56,6 +56,7 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
       <div class="fpill" data-quick="week">this week</div>
       <div class="fpill" id="g-toggle-filters">filters</div>
       <div class="tb-spacer"></div>
+      <div class="btn btn-green disabled" id="g-stage">Stage changes</div>
       <div class="btn btn-neutral disabled" id="g-rebase">rebase</div>
     </div>
     <div class="tb-filters" id="g-filters" hidden>
@@ -174,6 +175,44 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
     },
     { capture: true, signal }
   );
+
+  // ⌘⇧S / Ctrl+Shift+S → staging view (PRD §4.4, §6, SPEC.md item 5) — the first real
+  // keybinding in this codebase beyond per-view Escape, so there's no existing Mac/non-Mac
+  // normalization convention to copy; just accept either modifier key.
+  const stageBtn = canvas.querySelector("#g-stage");
+  let hasPendingChanges = false;
+
+  function goToStaging() {
+    if (!hasPendingChanges) return;
+    window.location.href = "staging.html";
+  }
+  stageBtn.addEventListener("click", goToStaging, { signal });
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        goToStaging();
+      }
+    },
+    { signal }
+  );
+
+  // Reflects the working tree's current file count on the button itself — "stage changes
+  // (1432)" — disabled at zero so there's nothing to navigate to. No file-watcher yet (same
+  // limitation noted elsewhere in this codebase), so this is a one-shot check on mount/refresh,
+  // not a live count.
+  getWorkingTreeStatus(repoPath)
+    .then((status) => {
+      const count = status.files.length;
+      hasPendingChanges = count > 0;
+      stageBtn.textContent = count > 0 ? `Stage changes (${count})` : "Stage changes";
+      stageBtn.classList.toggle("disabled", !hasPendingChanges);
+    })
+    .catch(() => {
+      hasPendingChanges = false;
+      stageBtn.classList.add("disabled");
+    });
 
   let totalCount = 0;
   let filter = {};

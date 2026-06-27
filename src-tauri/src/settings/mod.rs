@@ -1,9 +1,9 @@
 //! App-level settings (not per-repo/workspace), persisted as a flat JSON file at the app
 //! config dir — same storage shape as `recent.rs`, just a single object instead of a list.
-//! Currently holds only the two drag-resizable panel widths introduced alongside the
-//! commit-detail overlay (SPEC.md item 4 follow-up); SPEC.md item 14 (Preferences) is expected
-//! to grow this same struct/file with its own fields later rather than introduce a second one —
-//! `#[serde(default)]` means an older settings file missing those future fields still loads
+//! Holds the drag-resizable panel widths (sidebar, commit-detail overlay, staging file list,
+//! and any future one — see SPEC.md's "Resizable panels" note for the shared pattern these all
+//! follow) plus whatever SPEC.md item 14 (Preferences) grows this same struct/file with later
+//! — `#[serde(default)]` means an older settings file missing those future fields still loads
 //! cleanly instead of failing.
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 pub struct AppSettings {
     pub sidebar_width: f64,
     pub commit_overlay_width: f64,
+    pub staging_files_width: f64,
 }
 
 impl Default for AppSettings {
@@ -22,6 +23,7 @@ impl Default for AppSettings {
         Self {
             sidebar_width: 156.0,
             commit_overlay_width: 264.0,
+            staging_files_width: 196.0,
         }
     }
 }
@@ -43,21 +45,31 @@ pub fn load(app: &AppHandle) -> AppSettings {
         .unwrap_or_default()
 }
 
-/// Applies `sidebar_width`/`commit_overlay_width` onto the loaded `base` wherever the caller
-/// passed `Some(..)`, leaving the other field untouched — split out from `save` so the merge
-/// logic is testable without an `AppHandle`/real filesystem.
-fn merge(base: AppSettings, sidebar_width: Option<f64>, commit_overlay_width: Option<f64>) -> AppSettings {
+/// Applies each `Some(..)` field onto the loaded `base`, leaving the others untouched — split
+/// out from `save` so the merge logic is testable without an `AppHandle`/real filesystem.
+fn merge(
+    base: AppSettings,
+    sidebar_width: Option<f64>,
+    commit_overlay_width: Option<f64>,
+    staging_files_width: Option<f64>,
+) -> AppSettings {
     AppSettings {
         sidebar_width: sidebar_width.unwrap_or(base.sidebar_width),
         commit_overlay_width: commit_overlay_width.unwrap_or(base.commit_overlay_width),
+        staging_files_width: staging_files_width.unwrap_or(base.staging_files_width),
     }
 }
 
 /// Read-modify-write: each call only needs to know the *one* field it's changing — a resize-end
-/// on the sidebar handle doesn't need to also know the overlay's current width just to round
-/// it back unchanged, and vice versa.
-pub fn save(app: &AppHandle, sidebar_width: Option<f64>, commit_overlay_width: Option<f64>) -> Result<(), String> {
-    let merged = merge(load(app), sidebar_width, commit_overlay_width);
+/// on one panel's handle doesn't need to also know every other panel's current width just to
+/// round it back unchanged.
+pub fn save(
+    app: &AppHandle,
+    sidebar_width: Option<f64>,
+    commit_overlay_width: Option<f64>,
+    staging_files_width: Option<f64>,
+) -> Result<(), String> {
+    let merged = merge(load(app), sidebar_width, commit_overlay_width, staging_files_width);
     let path = settings_file_path(app)?;
     let contents = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     std::fs::write(&path, contents).map_err(|e| e.to_string())
@@ -69,17 +81,22 @@ mod tests {
 
     #[test]
     fn merge_overwrites_only_the_provided_field() {
-        let base = AppSettings { sidebar_width: 156.0, commit_overlay_width: 264.0 };
+        let base = AppSettings { sidebar_width: 156.0, commit_overlay_width: 264.0, staging_files_width: 196.0 };
 
-        let sidebar_only = merge(base, Some(200.0), None);
+        let sidebar_only = merge(base, Some(200.0), None, None);
         assert_eq!(sidebar_only.sidebar_width, 200.0);
         assert_eq!(sidebar_only.commit_overlay_width, 264.0);
+        assert_eq!(sidebar_only.staging_files_width, 196.0);
 
-        let overlay_only = merge(base, None, Some(320.0));
+        let overlay_only = merge(base, None, Some(320.0), None);
         assert_eq!(overlay_only.sidebar_width, 156.0);
         assert_eq!(overlay_only.commit_overlay_width, 320.0);
 
-        let neither = merge(base, None, None);
+        let files_only = merge(base, None, None, Some(240.0));
+        assert_eq!(files_only.staging_files_width, 240.0);
+        assert_eq!(files_only.sidebar_width, 156.0);
+
+        let neither = merge(base, None, None, None);
         assert_eq!(neither, base);
     }
 
@@ -91,5 +108,6 @@ mod tests {
         let partial: AppSettings = serde_json::from_str(r#"{"sidebar_width": 200.0}"#).unwrap();
         assert_eq!(partial.sidebar_width, 200.0);
         assert_eq!(partial.commit_overlay_width, AppSettings::default().commit_overlay_width);
+        assert_eq!(partial.staging_files_width, AppSettings::default().staging_files_width);
     }
 }

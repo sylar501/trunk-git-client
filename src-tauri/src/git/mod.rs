@@ -52,6 +52,46 @@ impl Repo {
     pub fn create_branch_at(&self, sha: &str, name: &str) -> Result<(), String> {
         create_branch_at(&self.inner, sha, name)
     }
+
+    pub fn working_tree_status(&self) -> Result<WorkingTreeStatus, String> {
+        working_tree_status(&self.inner)
+    }
+
+    pub fn working_file_diff(&self, file_path: &str) -> Result<FileHunkDiff, String> {
+        working_file_diff(&self.inner, file_path)
+    }
+
+    pub fn stage_file(&self, file_path: &str) -> Result<(), String> {
+        stage_file(&self.inner, file_path)
+    }
+
+    pub fn unstage_file(&self, file_path: &str) -> Result<(), String> {
+        unstage_file(&self.inner, file_path)
+    }
+
+    pub fn stage_hunk(&self, file_path: &str, new_start: u32) -> Result<(), String> {
+        stage_hunk(&self.inner, file_path, new_start)
+    }
+
+    pub fn unstage_hunk(&self, file_path: &str, old_start: u32) -> Result<(), String> {
+        unstage_hunk(&self.inner, file_path, old_start)
+    }
+
+    pub fn stage_line(&self, file_path: &str, new_start: u32, line_index_in_hunk: u32) -> Result<(), String> {
+        stage_line(&self.inner, file_path, new_start, line_index_in_hunk)
+    }
+
+    pub fn unstage_line(&self, file_path: &str, old_start: u32, line_index_in_hunk: u32) -> Result<(), String> {
+        unstage_line(&self.inner, file_path, old_start, line_index_in_hunk)
+    }
+
+    pub fn last_commit_message(&self) -> Result<Option<String>, String> {
+        last_commit_message(&self.inner)
+    }
+
+    pub fn commit_changes(&self, message: &str, amend: bool, ssh_sign: bool) -> Result<String, String> {
+        commit_changes(&self.inner, message, amend, ssh_sign)
+    }
 }
 
 // --- Wire types (PRD §7.1) -----------------------------------------------------------------
@@ -515,7 +555,7 @@ pub struct CommitDetail {
     pub files: Vec<CommitFileChange>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffLineKind {
     Context,
@@ -777,6 +817,629 @@ fn create_branch_at(repo: &Repository, sha: &str, name: &str) -> Result<(), Stri
     Ok(())
 }
 
+// --- Working tree staging (PRD §4.4, §8, SPEC.md item 5) ------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatusKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkingFileEntry {
+    pub path: String,
+    pub status: FileStatusKind,
+    pub additions: u32,
+    pub deletions: u32,
+    /// Tri-state checkbox = `staged && !unstaged` → checked, `staged` → partial, else unchecked.
+    pub staged: bool,
+    pub unstaged: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkingTreeStatus {
+    pub files: Vec<WorkingFileEntry>,
+    pub branch_name: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// Drives the commit panel's SSH-sign toggle: pre-disabled (not just erroring at commit
+    /// time) when `git config user.signingkey` is unset.
+    pub has_signing_key: bool,
+    /// Drives the amend toggle: disabled on an unborn HEAD (nothing to amend yet).
+    pub can_amend: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StagedState {
+    Staged,
+    Unstaged,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HunkLineRow {
+    pub kind: DiffLineKind,
+    pub old_lineno: Option<u32>,
+    pub new_lineno: Option<u32>,
+    pub content: String,
+    /// Only meaningful for addition/deletion lines — context lines are always `Staged` and
+    /// never rendered with a gutter dot by the frontend.
+    pub staged: StagedState,
+    /// This line's position within `HunkRow.lines` — the stable per-line address passed back to
+    /// `stage_line`/`unstage_line`. See `HunkRow.old_start`/`new_start` for why a position
+    /// within the hunk, rather than an absolute line number, is what's stable here too.
+    pub line_index_in_hunk: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HunkRow {
+    /// This hunk's start line in HEAD's version of the file — stable across this diff (HEAD vs.
+    /// workdir, used for display) and the HEAD-vs-index diff `unstage_hunk`/`unstage_line`
+    /// actually operate on, since both use HEAD as their "old" side. NOT stable against the
+    /// index-vs-workdir diff `stage_hunk`/`stage_line` operate on, since the index moves as
+    /// other hunks in the same file get staged/unstaged — use `new_start` for those instead.
+    pub old_start: u32,
+    /// This hunk's start line in the *current working directory* file — stable across this diff
+    /// and the index-vs-workdir diff `stage_hunk`/`stage_line` operate on, since both use the
+    /// workdir as their "new" side (staging only ever touches the index, never the workdir).
+    pub new_start: u32,
+    pub header: String,
+    pub lines: Vec<HunkLineRow>,
+    /// Drives the green "stage hunk" / amber "unstage hunk" button flip.
+    pub fully_staged: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileHunkDiff {
+    pub path: String,
+    pub hunks: Vec<HunkRow>,
+    pub is_binary: bool,
+}
+
+fn working_tree_status(repo: &Repository) -> Result<WorkingTreeStatus, String> {
+    let mut status_opts = git2::StatusOptions::new();
+    status_opts.include_untracked(true).recurse_untracked_dirs(true);
+    let statuses = repo.statuses(Some(&mut status_opts)).map_err(|e| e.to_string())?;
+
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let index = repo.index().map_err(|e| e.to_string())?;
+
+    let unstaged_diff = repo
+        .diff_index_to_workdir(Some(&index), None)
+        .map_err(|e| e.to_string())?;
+    let unstaged_by_path: HashMap<String, (u32, u32)> = diff_file_stats(&unstaged_diff)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|f| (f.path, (f.additions, f.deletions)))
+        .collect();
+
+    let staged_diff = repo
+        .diff_tree_to_index(head_tree.as_ref(), Some(&index), None)
+        .map_err(|e| e.to_string())?;
+    let staged_by_path: HashMap<String, (u32, u32)> = diff_file_stats(&staged_diff)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|f| (f.path, (f.additions, f.deletions)))
+        .collect();
+
+    let mut files = Vec::new();
+    for entry in statuses.iter() {
+        let status = entry.status();
+        if status.contains(git2::Status::IGNORED) {
+            continue;
+        }
+        let Some(path) = entry.path().map(|p| p.to_string()) else { continue };
+
+        let staged = status.intersects(
+            git2::Status::INDEX_NEW
+                | git2::Status::INDEX_MODIFIED
+                | git2::Status::INDEX_DELETED
+                | git2::Status::INDEX_RENAMED
+                | git2::Status::INDEX_TYPECHANGE,
+        );
+        let unstaged = status.intersects(
+            git2::Status::WT_NEW
+                | git2::Status::WT_MODIFIED
+                | git2::Status::WT_DELETED
+                | git2::Status::WT_RENAMED
+                | git2::Status::WT_TYPECHANGE,
+        );
+
+        let status_kind = if status.intersects(git2::Status::INDEX_DELETED | git2::Status::WT_DELETED) {
+            FileStatusKind::Deleted
+        } else if status.intersects(git2::Status::INDEX_NEW | git2::Status::WT_NEW) {
+            FileStatusKind::Added
+        } else {
+            FileStatusKind::Modified
+        };
+
+        let (ua, ud) = unstaged_by_path.get(&path).copied().unwrap_or((0, 0));
+        let (sa, sd) = staged_by_path.get(&path).copied().unwrap_or((0, 0));
+
+        files.push(WorkingFileEntry {
+            path,
+            status: status_kind,
+            additions: ua + sa,
+            deletions: ud + sd,
+            staged,
+            unstaged,
+        });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let branch_name = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        .unwrap_or_else(|| "HEAD".to_string());
+    let (author_name, author_email) = repo
+        .signature()
+        .map(|s| (s.name().unwrap_or_default().to_string(), s.email().unwrap_or_default().to_string()))
+        .unwrap_or_default();
+    let has_signing_key = repo
+        .config()
+        .ok()
+        .and_then(|c| c.get_string("user.signingkey").ok())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    let can_amend = repo.head().and_then(|h| h.peel_to_commit()).is_ok();
+
+    Ok(WorkingTreeStatus {
+        files,
+        branch_name,
+        author_name,
+        author_email,
+        has_signing_key,
+        can_amend,
+    })
+}
+
+/// Set of `(kind, old_lineno, new_lineno)` triples touched by `diff` — used to mark which lines
+/// of the combined HEAD-vs-workdir diff are already present in the index (i.e. already staged).
+fn collect_line_set(diff: &git2::Diff) -> Result<HashSet<(DiffLineKind, Option<u32>, Option<u32>)>, git2::Error> {
+    let mut set = HashSet::new();
+    diff.foreach(
+        &mut |_delta, _progress| true,
+        None,
+        None,
+        Some(&mut |_delta, _hunk, line| {
+            if let Some(kind) = line_kind(line.origin()) {
+                set.insert((kind, line.old_lineno(), line.new_lineno()));
+            }
+            true
+        }),
+    )?;
+    Ok(set)
+}
+
+/// Hunk-structured diff for one file (PRD §8) — the union of unstaged (index→workdir) and
+/// already-staged (HEAD→index) changes for that file, so the UI can render one diff with a
+/// per-line staged/unstaged gutter rather than two separate diffs. Computed via
+/// `diff_tree_to_workdir_with_index` (HEAD vs workdir, using the index for stat info) for hunk
+/// shape, cross-referenced against a `diff_tree_to_index` (HEAD vs index) line set to know which
+/// of those lines are already staged.
+fn working_file_diff(repo: &Repository, file_path: &str) -> Result<FileHunkDiff, String> {
+    let index = repo.index().map_err(|e| e.to_string())?;
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+
+    let mut full_opts = git2::DiffOptions::new();
+    full_opts.pathspec(file_path);
+    let full_diff = repo
+        .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut full_opts))
+        .map_err(|e| e.to_string())?;
+
+    if full_diff.deltas().count() == 0 {
+        return Ok(FileHunkDiff { path: file_path.to_string(), hunks: Vec::new(), is_binary: false });
+    }
+    if full_diff.deltas().next().map(|d| d.flags().contains(git2::DiffFlags::BINARY)).unwrap_or(false) {
+        return Ok(FileHunkDiff { path: file_path.to_string(), hunks: Vec::new(), is_binary: true });
+    }
+
+    let mut staged_opts = git2::DiffOptions::new();
+    staged_opts.pathspec(file_path);
+    let staged_diff = repo
+        .diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut staged_opts))
+        .map_err(|e| e.to_string())?;
+    let staged_lines = collect_line_set(&staged_diff).map_err(|e| e.to_string())?;
+
+    let mut patch = git2::Patch::from_diff(&full_diff, 0)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No diff produced for this file.".to_string())?;
+
+    let mut hunks = Vec::new();
+    for h in 0..patch.num_hunks() {
+        let (hunk, line_count) = patch.hunk(h).map_err(|e| e.to_string())?;
+        let header = String::from_utf8_lossy(hunk.header()).trim_end().to_string();
+        let mut lines = Vec::with_capacity(line_count);
+        let mut any_unstaged = false;
+        for li in 0..line_count {
+            let line = patch.line_in_hunk(h, li).map_err(|e| e.to_string())?;
+            let Some(kind) = line_kind(line.origin()) else { continue };
+            let content = String::from_utf8_lossy(line.content()).trim_end_matches('\n').to_string();
+            let key = (kind, line.old_lineno(), line.new_lineno());
+            let staged = if kind == DiffLineKind::Context || staged_lines.contains(&key) {
+                StagedState::Staged
+            } else {
+                StagedState::Unstaged
+            };
+            if kind != DiffLineKind::Context && staged == StagedState::Unstaged {
+                any_unstaged = true;
+            }
+            let line_index_in_hunk = lines.len() as u32;
+            lines.push(HunkLineRow {
+                kind,
+                old_lineno: line.old_lineno(),
+                new_lineno: line.new_lineno(),
+                content,
+                staged,
+                line_index_in_hunk,
+            });
+        }
+        hunks.push(HunkRow {
+            old_start: hunk.old_start(),
+            new_start: hunk.new_start(),
+            header,
+            lines,
+            fully_staged: !any_unstaged,
+        });
+    }
+
+    Ok(FileHunkDiff { path: file_path.to_string(), hunks, is_binary: false })
+}
+
+fn stage_file(repo: &Repository, file_path: &str) -> Result<(), String> {
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(file_path);
+    let exists_on_disk = repo
+        .workdir()
+        .map(|w| w.join(path).exists())
+        .unwrap_or_else(|| path.exists());
+    if exists_on_disk {
+        index.add_path(path).map_err(|e| e.to_string())?;
+    } else {
+        index.remove_path(path).map_err(|e| e.to_string())?;
+    }
+    index.write().map_err(|e| e.to_string())
+}
+
+/// Whole-file unstage — equivalent to `git reset HEAD -- <path>`. On an unborn HEAD (no commits
+/// yet) there's no tree to reset to, so "unstage" just means dropping the path from the index.
+fn unstage_file(repo: &Repository, file_path: &str) -> Result<(), String> {
+    match repo.head().and_then(|h| h.peel_to_commit()) {
+        Ok(head_commit) => repo
+            .reset_default(Some(head_commit.as_object()), [file_path])
+            .map_err(|e| e.to_string()),
+        Err(_) => {
+            let mut index = repo.index().map_err(|e| e.to_string())?;
+            index.remove_path(std::path::Path::new(file_path)).map_err(|e| e.to_string())?;
+            index.write().map_err(|e| e.to_string())
+        }
+    }
+}
+
+struct RawLine {
+    origin: char,
+    content: Vec<u8>,
+}
+
+/// Builds a standalone single-hunk unified-diff buffer suitable for `Repository::apply` against
+/// the index.
+///
+/// `keep` is `None` for a whole-hunk operation (every non-context line participates) or
+/// `Some(line-indices-to-keep)` for a single-line toggle, identified by position within `lines`
+/// (which is always freshly re-derived from the *same* diff direction this patch will be applied
+/// against — see `apply_hunk_change` — so a position is stable here, unlike an absolute line
+/// number, which isn't: see `HunkRow.old_start`/`new_start`'s doc comments for why). Known
+/// limitation: this still assumes `lines` matches what the frontend saw when the hunk hadn't yet
+/// been *partially* staged — toggling a second line of an already-partially-staged hunk without
+/// an intervening refetch can address the wrong line, since the two diff directions' line sets
+/// for that hunk only agree before any of it has been staged. The frontend always refetches
+/// after each action, so this doesn't arise in normal use.
+///
+/// `reverse` is true for unstage operations, which are built from the HEAD→index diff (where
+/// `+` means "already in the index") rather than the index→workdir diff (where `+` means "not
+/// yet in the index") — so an *unselected* line's demotion rule (context vs. dropped) flips
+/// depending on which of those two a `+`/`-` origin actually means "currently present in the
+/// index", and the kept lines' signs are flipped at the end so applying the result to the index
+/// actually moves it *back toward* HEAD instead of further from it.
+fn build_partial_hunk_patch(
+    file_path: &str,
+    old_start: u32,
+    new_start: u32,
+    lines: &[RawLine],
+    keep: Option<&HashSet<u32>>,
+    reverse: bool,
+) -> String {
+    let mut body = String::new();
+    let mut old_count = 0u32;
+    let mut new_count = 0u32;
+    // Real unified diffs mark a line lacking a trailing newline with a literal `\ No newline at
+    // end of file` line immediately after it, rather than just silently omitting the `\n` —
+    // omitting that marker (while still padding the patch *text* itself with a `\n` so the patch
+    // stays line-oriented) made libgit2 believe the line's content disagreed with what's
+    // actually on disk, which is what caused real "hunk did not apply" failures on files lacking
+    // a final newline. Since only the file's true last line can lack one, it's always the last
+    // line we actually emit (if any line lacks one at all), so a single flag checked once after
+    // the loop is enough — no need to track it per-line.
+    let mut last_emitted_no_newline = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let kept = keep.map(|k| k.contains(&(i as u32))).unwrap_or(true);
+        let mut origin = line.origin;
+
+        if origin != ' ' && !kept {
+            // Whichever sign currently means "present in the index" for this diff direction
+            // becomes context (still present, untouched by this operation); the other sign is
+            // dropped entirely (it doesn't currently exist in the index, so it can't be a
+            // context line).
+            let currently_in_index = if reverse { origin == '+' } else { origin == '-' };
+            if currently_in_index {
+                origin = ' ';
+            } else {
+                continue;
+            }
+        }
+
+        if reverse && (origin == '+' || origin == '-') {
+            origin = if origin == '+' { '-' } else { '+' };
+        }
+
+        match origin {
+            ' ' => {
+                old_count += 1;
+                new_count += 1;
+            }
+            '+' => new_count += 1,
+            '-' => old_count += 1,
+            _ => {}
+        }
+
+        body.push(origin);
+        body.push_str(&String::from_utf8_lossy(&line.content));
+        last_emitted_no_newline = !line.content.ends_with(b"\n");
+        if last_emitted_no_newline {
+            body.push('\n');
+        }
+    }
+
+    if last_emitted_no_newline {
+        body.push_str("\\ No newline at end of file\n");
+    }
+
+    let (header_old_start, header_new_start) = if reverse { (new_start, old_start) } else { (old_start, new_start) };
+    format!(
+        "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -{ho},{oc} +{hn},{nc} @@\n{body}",
+        p = file_path,
+        ho = header_old_start,
+        oc = old_count,
+        hn = header_new_start,
+        nc = new_count,
+        body = body
+    )
+}
+
+/// Locates a hunk by `new_start` (staging — see `HunkRow.new_start`'s doc comment) or by
+/// `old_start` (unstaging — see `HunkRow.old_start`'s).
+fn find_hunk(patch: &mut git2::Patch, position: u32, match_new_start: bool) -> Result<usize, String> {
+    for h in 0..patch.num_hunks() {
+        let (hunk, _) = patch.hunk(h).map_err(|e| e.to_string())?;
+        let candidate = if match_new_start { hunk.new_start() } else { hunk.old_start() };
+        if candidate == position {
+            return Ok(h);
+        }
+    }
+    Err("Hunk not found — the working tree may have changed since the diff was loaded.".to_string())
+}
+
+fn apply_patch_text_to_index(repo: &Repository, patch_text: &str) -> Result<(), String> {
+    let diff = git2::Diff::from_buffer(patch_text.as_bytes()).map_err(|e| e.to_string())?;
+    repo.apply(&diff, git2::ApplyLocation::Index, None).map_err(|e| e.to_string())
+}
+
+/// Shared mechanics for `stage_hunk`/`unstage_hunk`/`stage_line`/`unstage_line` — re-derives the
+/// relevant diff direction fresh (never trusts a previously-fetched `FileHunkDiff`), locates the
+/// target hunk, and applies a (possibly partial, possibly reversed) patch built from it.
+///
+/// `position` is `new_start` when `!reverse` (staging, against the index→workdir diff) or
+/// `old_start` when `reverse` (unstaging, against the HEAD→index diff) — whichever axis that
+/// diff direction actually shares with the diff the frontend displayed the hunk from. Using the
+/// *other* axis (e.g. `old_start` to locate a hunk for staging) is exactly the bug this function
+/// used to have: `old_start` is HEAD-relative, but the staging diff's "old" side is the *index*,
+/// which drifts away from HEAD as soon as anything earlier in the same file gets staged —
+/// `new_start` (workdir-relative) is what staging's diff actually shares with the display diff.
+fn apply_hunk_change(
+    repo: &Repository,
+    file_path: &str,
+    position: u32,
+    keep: Option<&HashSet<u32>>,
+    reverse: bool,
+) -> Result<(), String> {
+    let index = repo.index().map_err(|e| e.to_string())?;
+    let mut opts = git2::DiffOptions::new();
+    opts.pathspec(file_path);
+    let diff = if reverse {
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut opts))
+            .map_err(|e| e.to_string())?
+    } else {
+        repo.diff_index_to_workdir(Some(&index), Some(&mut opts)).map_err(|e| e.to_string())?
+    };
+
+    let mut patch = git2::Patch::from_diff(&diff, 0)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No matching changes for this file.".to_string())?;
+    let h = find_hunk(&mut patch, position, !reverse)?;
+    let (hunk, line_count) = patch.hunk(h).map_err(|e| e.to_string())?;
+    let old_start = hunk.old_start();
+    let new_start = hunk.new_start();
+
+    // Only real content lines — `line_kind` already excludes the "no newline at end of file"
+    // pseudo-lines libgit2 reports separately within a hunk's line count; this loop must filter
+    // the same way so `lines`' indices line up with `HunkRow.lines`' (and so the EOF-newline
+    // marker handling above, driven off the *real* lines' own raw bytes, isn't confused by an
+    // extra pseudo-line entry).
+    let mut lines = Vec::with_capacity(line_count);
+    for li in 0..line_count {
+        let line = patch.line_in_hunk(h, li).map_err(|e| e.to_string())?;
+        if line_kind(line.origin()).is_none() {
+            continue;
+        }
+        lines.push(RawLine { origin: line.origin(), content: line.content().to_vec() });
+    }
+
+    let text = build_partial_hunk_patch(file_path, old_start, new_start, &lines, keep, reverse);
+    apply_patch_text_to_index(repo, &text)
+}
+
+fn stage_hunk(repo: &Repository, file_path: &str, new_start: u32) -> Result<(), String> {
+    apply_hunk_change(repo, file_path, new_start, None, false)
+}
+
+fn unstage_hunk(repo: &Repository, file_path: &str, old_start: u32) -> Result<(), String> {
+    apply_hunk_change(repo, file_path, old_start, None, true)
+}
+
+fn stage_line(repo: &Repository, file_path: &str, new_start: u32, line_index_in_hunk: u32) -> Result<(), String> {
+    let mut keep = HashSet::new();
+    keep.insert(line_index_in_hunk);
+    apply_hunk_change(repo, file_path, new_start, Some(&keep), false)
+}
+
+fn unstage_line(repo: &Repository, file_path: &str, old_start: u32, line_index_in_hunk: u32) -> Result<(), String> {
+    let mut keep = HashSet::new();
+    keep.insert(line_index_in_hunk);
+    apply_hunk_change(repo, file_path, old_start, Some(&keep), true)
+}
+
+/// Full message of HEAD's commit, for the amend toggle's message-textarea pre-fill — `None` on
+/// an unborn HEAD (nothing to amend). Kept separate from `CommitDetail` (which belongs to the
+/// commit-overlay feature) to keep this session's blast radius small.
+fn last_commit_message(repo: &Repository) -> Result<Option<String>, String> {
+    match repo.head().and_then(|h| h.peel_to_commit()) {
+        Ok(commit) => Ok(Some(commit.message().unwrap_or_default().to_string())),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Shells out to `ssh-keygen -Y sign` to produce an SSH commit signature — git2-rs has no
+/// SSH-signing support of its own, and this is the same external mechanism plain `git`'s
+/// `gpg.format=ssh` path uses internally, so there's no way to do this through libgit2 alone.
+/// Returns the new (signed) commit's Oid; does not move any ref.
+fn sign_and_create_commit(
+    repo: &Repository,
+    sig: &git2::Signature,
+    message: &str,
+    tree: &git2::Tree,
+    parents: &[&git2::Commit],
+) -> Result<Oid, String> {
+    let key_path = repo
+        .config()
+        .map_err(|e| e.to_string())?
+        .get_string("user.signingkey")
+        .map_err(|_| "No SSH signing key configured (git config user.signingkey).".to_string())?;
+
+    let buf = repo
+        .commit_create_buffer(sig, sig, message, tree, parents)
+        .map_err(|e| e.to_string())?;
+    let content = std::str::from_utf8(&buf).map_err(|e| e.to_string())?.to_string();
+
+    let pid = std::process::id();
+    let scratch_dir = std::env::temp_dir();
+    let scratch_path = scratch_dir.join(format!("trunk-commit-{pid}.txt"));
+    let sig_path = scratch_dir.join(format!("trunk-commit-{pid}.txt.sig"));
+    let cleanup = || {
+        let _ = std::fs::remove_file(&scratch_path);
+        let _ = std::fs::remove_file(&sig_path);
+    };
+
+    std::fs::write(&scratch_path, &content).map_err(|e| e.to_string())?;
+    let output = std::process::Command::new("ssh-keygen")
+        .args(["-Y", "sign", "-f", &key_path, "-n", "git"])
+        .arg(&scratch_path)
+        .output();
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            cleanup();
+            return Err(format!("Failed to run ssh-keygen: {e}"));
+        }
+    };
+    if !output.status.success() {
+        cleanup();
+        return Err(format!("ssh-keygen signing failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    let signature = match std::fs::read_to_string(&sig_path) {
+        Ok(s) => s,
+        Err(e) => {
+            cleanup();
+            return Err(format!("Couldn't read signature file: {e}"));
+        }
+    };
+    cleanup();
+
+    repo.commit_signed(&content, &signature, None).map_err(|e| e.to_string())
+}
+
+/// Moves the current branch's tip to `new_oid` — used instead of `repo.commit(Some("HEAD"),
+/// ...)`'s built-in ref update because that path requires the new commit's first parent to match
+/// HEAD's *current* tip, which amend (parents = HEAD's own parents, not `[HEAD]`) deliberately
+/// violates, and because `commit_signed` never takes an `update_ref` at all. Reads "HEAD"'s own
+/// symbolic target directly (rather than `repo.head()`, which fails on an unborn branch) so this
+/// works whether or not the branch already has a tip, and naturally refuses a detached HEAD
+/// (whose target isn't symbolic).
+fn move_head_to(repo: &Repository, new_oid: Oid, message: &str) -> Result<(), String> {
+    let refname = repo
+        .find_reference("HEAD")
+        .ok()
+        .and_then(|h| h.symbolic_target().map(|s| s.to_string()))
+        .ok_or_else(|| "Can't determine the current branch to update (detached HEAD?).".to_string())?;
+    repo.reference(&refname, new_oid, true, &format!("commit: {message}"))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Commits the current index (PRD §8). `amend` replaces HEAD with a new commit carrying HEAD's
+/// own parents (i.e. skips past HEAD entirely, matching `git commit --amend`) instead of adding
+/// HEAD as a parent.
+fn commit_changes(repo: &Repository, message: &str, amend: bool, ssh_sign: bool) -> Result<String, String> {
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
+    let tree = repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
+
+    let head_commit = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    if !amend {
+        if let Some(hc) = &head_commit {
+            if hc.tree_id() == tree_oid {
+                return Err("Nothing staged to commit.".to_string());
+            }
+        }
+    }
+
+    let parents: Vec<git2::Commit> = if amend {
+        match &head_commit {
+            Some(hc) => hc.parents().collect(),
+            None => return Err("Nothing to amend — no commits yet.".to_string()),
+        }
+    } else {
+        head_commit.iter().cloned().collect()
+    };
+    let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+
+    let sig = repo.signature().map_err(|e| e.to_string())?;
+
+    let new_oid = if ssh_sign {
+        sign_and_create_commit(repo, &sig, message, &tree, &parent_refs)?
+    } else {
+        repo.commit(None, &sig, &sig, message, &tree, &parent_refs)
+            .map_err(|e| e.to_string())?
+    };
+
+    move_head_to(repo, new_oid, message)?;
+    Ok(new_oid.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -981,6 +1644,253 @@ mod tests {
         assert!(is_working_tree_clean(&repo).unwrap());
         std::fs::write(dir.join("untracked.txt"), "stray").unwrap();
         assert!(!is_working_tree_clean(&repo).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- Staging & committing (SPEC.md item 5, PRD §4.4/§8) ---------------------------------
+
+    #[test]
+    fn working_tree_status_reports_new_modified_and_partially_staged_files() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\ntwo\nthree\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "one\ntwo\nthree\n");
+
+        // Untracked new file.
+        std::fs::write(dir.join("b.txt"), "new file\n").unwrap();
+        // Modified-but-unstaged file.
+        std::fs::write(dir.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+
+        let status = working_tree_status(&repo).unwrap();
+        let a = status.files.iter().find(|f| f.path == "a.txt").unwrap();
+        assert_eq!(a.status, FileStatusKind::Modified);
+        assert!(a.unstaged && !a.staged);
+
+        let b = status.files.iter().find(|f| f.path == "b.txt").unwrap();
+        assert_eq!(b.status, FileStatusKind::Added);
+        assert!(b.unstaged && !b.staged);
+
+        assert!(status.can_amend);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn stage_file_and_unstage_file_roundtrip() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\ntwo\nthree\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "one\ntwo\nthree\n");
+        std::fs::write(dir.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+
+        stage_file(&repo, "a.txt").unwrap();
+        let status = working_tree_status(&repo).unwrap();
+        let a = status.files.iter().find(|f| f.path == "a.txt").unwrap();
+        assert!(a.staged && !a.unstaged, "fully staged after stage_file");
+
+        unstage_file(&repo, "a.txt").unwrap();
+        let status = working_tree_status(&repo).unwrap();
+        let a = status.files.iter().find(|f| f.path == "a.txt").unwrap();
+        assert!(!a.staged && a.unstaged, "back to unstaged after unstage_file");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn stage_hunk_then_unstage_hunk_is_a_full_roundtrip() {
+        let (dir, repo) = temp_repo();
+        let base_lines: Vec<String> = (1..=24).map(|n| format!("line{n}")).collect();
+        let base_content = format!("{}\n", base_lines.join("\n"));
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", &base_content);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", &base_content);
+
+        // Two separate hunks — far enough apart (20+ unchanged lines between them) not to be
+        // merged into one by libgit2's default 3-line context radius.
+        let mut edited_lines = base_lines.clone();
+        edited_lines[0] = "ONE".to_string();
+        let last = edited_lines.len() - 1;
+        edited_lines[last] = "TWENTYFOUR".to_string();
+        let edited_content = format!("{}\n", edited_lines.join("\n"));
+        std::fs::write(dir.join("a.txt"), &edited_content).unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert!(diff.hunks.len() >= 2, "expected two separate hunks, got {}", diff.hunks.len());
+        assert!(diff.hunks.iter().all(|h| !h.fully_staged));
+
+        let first_hunk_old_start = diff.hunks[0].old_start;
+        let first_hunk_new_start = diff.hunks[0].new_start;
+        stage_hunk(&repo, "a.txt", first_hunk_new_start).unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        let first = diff.hunks.iter().find(|h| h.old_start == first_hunk_old_start).unwrap();
+        assert!(first.fully_staged, "first hunk should now be fully staged");
+        assert!(diff.hunks.iter().any(|h| !h.fully_staged), "second hunk still unstaged");
+
+        unstage_hunk(&repo, "a.txt", first_hunk_old_start).unwrap();
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert!(
+            diff.hunks.iter().all(|h| !h.fully_staged),
+            "unstage_hunk should fully revert the hunk back to unstaged"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Regression test for the reported "hunk did not apply" bug: staging a file's first hunk
+    /// whose added/removed line counts are *unequal* shifts every later hunk's position in the
+    /// index relative to HEAD — `old_start` (HEAD-relative) no longer matches that later hunk's
+    /// position in the index→workdir diff `stage_hunk` actually operates against, but
+    /// `new_start` (workdir-relative) still does, since staging never touches the workdir.
+    #[test]
+    fn staging_an_earlier_unequal_length_hunk_does_not_break_staging_a_later_one() {
+        let (dir, repo) = temp_repo();
+        let base_lines: Vec<String> = (1..=30).map(|n| format!("line{n}")).collect();
+        let base_content = format!("{}\n", base_lines.join("\n"));
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", &base_content);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", &base_content);
+
+        // First hunk: replace one line with three (net +2 lines) — an unequal-length change.
+        // Second hunk: a simple one-line replace near the end, far enough away to stay separate.
+        let mut edited_lines = base_lines.clone();
+        edited_lines.splice(0..1, ["ONE-A".to_string(), "ONE-B".to_string(), "ONE-C".to_string()]);
+        let last = edited_lines.len() - 1;
+        edited_lines[last] = "THIRTY".to_string();
+        let edited_content = format!("{}\n", edited_lines.join("\n"));
+        std::fs::write(dir.join("a.txt"), &edited_content).unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert_eq!(diff.hunks.len(), 2, "expected two separate hunks");
+        let first_new_start = diff.hunks[0].new_start;
+
+        stage_hunk(&repo, "a.txt", first_new_start).unwrap();
+
+        // Re-fetch fresh (as the real UI always does) and stage the second hunk by ITS
+        // freshly-recomputed `new_start` — this used to fail with libgit2's ApplyFailed because
+        // the old code matched on `old_start` against the index→workdir diff, whose "old" side
+        // (the index) had already shifted by +2 lines relative to HEAD once the first hunk was
+        // staged.
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        let second = diff.hunks.iter().find(|h| !h.fully_staged).expect("second hunk still unstaged");
+        let second_new_start = second.new_start;
+
+        stage_hunk(&repo, "a.txt", second_new_start).unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert!(diff.hunks.iter().all(|h| h.fully_staged), "both hunks should now be staged");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn stage_line_stages_only_the_selected_line() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\ntwo\nthree\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "one\ntwo\nthree\n");
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\nFOUR\nFIVE\n").unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        let added_four = hunk
+            .lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Addition && l.content == "FOUR")
+            .unwrap();
+
+        stage_line(&repo, "a.txt", hunk.new_start, added_four.line_index_in_hunk).unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        let hunk = &diff.hunks[0];
+        assert!(!hunk.fully_staged, "only one of two added lines was staged");
+        let four_line = hunk.lines.iter().find(|l| l.content == "FOUR").unwrap();
+        assert_eq!(four_line.staged, StagedState::Staged);
+        let five_line = hunk.lines.iter().find(|l| l.content == "FIVE").unwrap();
+        assert_eq!(five_line.staged, StagedState::Unstaged);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Regression test for the EOF-newline patch bug: a file with no trailing newline, where the
+    /// hunk being staged includes that final, newline-less line as unchanged context. The old
+    /// code fabricated a `\n` in the patch text with no `\ No newline at end of file` marker,
+    /// which made libgit2 reject the patch as not matching the actual on-disk content.
+    #[test]
+    fn stage_hunk_succeeds_on_a_file_with_no_trailing_newline() {
+        let (dir, repo) = temp_repo();
+        // No trailing newline after "three" — note the lack of `\n` here.
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\ntwo\nthree");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "one\ntwo\nthree");
+        // Change the first line; "three" (still the last line, still newline-less) stays as
+        // unchanged context within the same hunk.
+        std::fs::write(dir.join("a.txt"), "ONE\ntwo\nthree").unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert_eq!(diff.hunks.len(), 1);
+        let new_start = diff.hunks[0].new_start;
+
+        stage_hunk(&repo, "a.txt", new_start).unwrap();
+
+        let diff = working_file_diff(&repo, "a.txt").unwrap();
+        assert!(diff.hunks[0].fully_staged);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn commit_changes_writes_a_new_commit_and_refuses_when_nothing_staged() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let _c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "one\n");
+
+        assert!(
+            commit_changes(&repo, "nothing to commit", false, false).is_err(),
+            "must refuse when the index matches HEAD's tree"
+        );
+
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        stage_file(&repo, "a.txt").unwrap();
+        let new_sha = commit_changes(&repo, "add a second line", false, false).unwrap();
+
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id().to_string(), new_sha);
+        assert_eq!(head.message().unwrap(), "add a second line");
+        assert_eq!(head.parent_count(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn commit_changes_amend_replaces_head_keeping_its_parents() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let original_head = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "one\ntwo\n");
+
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        stage_file(&repo, "a.txt").unwrap();
+        let amended_sha = commit_changes(&repo, "amended message", true, false).unwrap();
+
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id().to_string(), amended_sha);
+        assert_ne!(head.id(), original_head, "amend must produce a new commit object");
+        assert_eq!(head.message().unwrap(), "amended message");
+        assert_eq!(head.parent_count(), 1);
+        assert_eq!(head.parent_id(0).unwrap(), c1, "amend keeps HEAD's own parent, not HEAD itself");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn last_commit_message_is_none_on_unborn_head() {
+        let (dir, repo) = temp_repo();
+        assert_eq!(last_commit_message(&repo).unwrap(), None);
+        let c1 = commit_with_file(&repo, &dir, "first message", &[], "a.txt", "x\n");
+        let _ = repo.find_commit(c1).unwrap();
+        assert_eq!(last_commit_message(&repo).unwrap(), Some("first message".to_string()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

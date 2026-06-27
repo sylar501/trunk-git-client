@@ -6,6 +6,30 @@ Feature-by-feature checklist, ordered by dependency. Each entry cites the PRD se
 Mark an entry `[x]` only when its acceptance criteria are fully met and the working tree
 for that session has been committed.
 
+## Resizable panels (pattern)
+
+Any panel described as resizable (the sidebar, the commit-detail overlay, the staging view's
+file list, and any future one — stash list, tag list, etc.) must reuse the same mechanics
+rather than inventing a per-panel variant:
+
+- **Drag mechanics**: `src/components/resize-handle.js`'s `attachResizeHandle(handleEl, {
+  getWidth, setWidth, min, max, invert?, onResizeEnd, signal })` — clamps to `[min, max]` on
+  every `mousemove`, calls `onResizeEnd(finalWidth)` once on `mouseup` (not per-mousemove).
+  `invert: true` is for a handle on the panel's *left* edge (dragging left grows it, e.g. the
+  commit overlay); omit it for a handle on the *right* edge (dragging right grows it, e.g. the
+  sidebar, the staging file list).
+- **Markup**: a flex-sibling `<div class="resize-handle">` strip between the panel and its
+  neighbour for normal in-flow panels (sidebar, staging file list) — the `.resize-handle` CSS
+  rule (components.css) already draws the centred hairline and blue hover/active state. A
+  `position:fixed` panel (the commit overlay) instead uses its own absolutely-positioned handle
+  drawn the same way (`.cdo-resize-handle`) since it has no normal flex sibling to be one.
+- **Persistence**: width lives in `src-tauri/src/settings/mod.rs`'s `AppSettings` struct
+  (one field per resizable panel — `sidebar_width`, `commit_overlay_width`, etc.), written via
+  `save_settings`'s read-modify-write `merge()` (each call only passes the one field it's
+  changing) and loaded once via `get_settings` before first render so the panel never flashes at
+  a default width before snapping to the persisted one. Extend that one struct/file for any new
+  panel — never introduce a second settings file.
+
 ---
 
 ## 0. [x] Scaffold + dark.css + SPEC.md — Session 1
@@ -117,21 +141,32 @@ for that session has been committed.
   changed-files list with +/− counts, inline unified diff per selected file, action buttons
   (cherry-pick, revert, branch here, copy SHA); Escape or click-outside dismisses.
 
-## 5. Staging & committing — §4.4, §8
+## 5. [x] Staging & committing — §4.4, §8 — Session 5
 
-- **Frontend**: `src/staging.html`, `src/components/diff-line.js`
-- **Backend**: working-tree diff, whole-file/hunk/line staging, commit (+ amend), SSH commit signing
+- **Frontend**: `src/staging.html`, `src/js/staging-page.js`, `src/js/staging-view.js`,
+  `src/components/file-list.js`, `src/components/commit-panel.js`, `src/components/diff-line.js`
+  (extended with an optional interactive staging gutter)
+- **Backend**: working-tree diff (`git/mod.rs`'s `WorkingTreeStatus`/`FileHunkDiff`),
+  whole-file/hunk/line staging (`stage_file`/`stage_hunk`/`stage_line` + unstage counterparts),
+  commit (+ amend), SSH commit signing via `ssh-keygen -Y sign`
 - **Dependencies**: Commit detail overlay (4) for shared diff rendering
 - **Acceptance criteria**:
-  - Manual entry only (toolbar button or ⌘⇧S) — never auto-shown. Three columns: file list
-    (196px) / hunk diff (centre) / commit panel (214px).
+  - Manual entry only (toolbar "Stage changes" button or ⌘⇧S in `graph-view.js`) — never
+    auto-shown. Three fixed-width columns: file list (196px) / hunk diff (centre) / commit panel
+    (214px); no drag-resize (unlike the commit overlay).
   - File list rows: tri-state checkbox, monospaced filename, +/− stats, M/A/D badge; green
     "Stage all" in section header.
   - Hunk/line staging: green "stage hunk" flips to amber "unstage hunk" once staged (dynamic
-    colour flipping, §5.1); staged lines filled ● in gutter, unstaged ○ at 38% opacity.
-  - Commit panel: message textarea (no char limit), amend toggle (pre-fills previous message,
-    same target SHA), SSH sign toggle, push-after-commit option. Primary: solid blue "commit to
-    main". Secondary: blue-outline "amend last commit". **No GPG signing in v1.**
+    colour flipping, §5.1); staged lines filled ● in gutter, unstaged ○ at 38% opacity, click to
+    toggle.
+  - Commit panel: message textarea (no char limit), amend checkbox (pre-fills the previous
+    commit's message, same target SHA), SSH sign checkbox (pre-disabled with a tooltip when
+    `git config user.signingkey` is unset, rather than erroring at commit time), push-after-commit
+    checkbox (visible per this layout, disabled — push itself is a later session). **Single
+    commit button, not two**: unchecked amend → solid blue "commit to `<branch>`"; checked amend
+    → the *same* button relabels/restyles to blue-outline "amend last commit" — revised from this
+    section's original "Primary ... Secondary ..." two-button wording during Session 5 (see PRD
+    §8's matching note). **No GPG signing in v1.**
   - Exit: "← history" button (Esc badge) or Escape; first Escape defocuses an active input,
     second exits to graph; transient toast confirms return.
 

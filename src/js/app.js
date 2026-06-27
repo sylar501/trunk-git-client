@@ -99,6 +99,46 @@ export async function getSettings() {
   return invoke("get_settings");
 }
 
-export async function saveSettings({ sidebarWidth, commitOverlayWidth } = {}) {
-  return invoke("save_settings", { sidebarWidth, commitOverlayWidth });
+export async function saveSettings({ sidebarWidth, commitOverlayWidth, stagingFilesWidth } = {}) {
+  return invoke("save_settings", { sidebarWidth, commitOverlayWidth, stagingFilesWidth });
+}
+
+export async function getWorkingTreeStatus(repoPath) {
+  return invoke("get_working_tree_status", { repoPath });
+}
+
+export async function getWorkingFileDiff(repoPath, filePath) {
+  return invoke("get_working_file_diff", { repoPath, filePath });
+}
+
+export async function stageFile(repoPath, filePath) {
+  return invoke("stage_file", { repoPath, filePath });
+}
+
+export async function unstageFile(repoPath, filePath) {
+  return invoke("unstage_file", { repoPath, filePath });
+}
+
+export async function stageHunk(repoPath, filePath, newStart) {
+  return invoke("stage_hunk", { repoPath, filePath, newStart });
+}
+
+export async function unstageHunk(repoPath, filePath, oldStart) {
+  return invoke("unstage_hunk", { repoPath, filePath, oldStart });
+}
+
+export async function stageLine(repoPath, filePath, newStart, lineIndexInHunk) {
+  return invoke("stage_line", { repoPath, filePath, newStart, lineIndexInHunk });
+}
+
+export async function unstageLine(repoPath, filePath, oldStart, lineIndexInHunk) {
+  return invoke("unstage_line", { repoPath, filePath, oldStart, lineIndexInHunk });
+}
+
+export async function getLastCommitMessage(repoPath) {
+  return invoke("get_last_commit_message", { repoPath });
+}
+
+export async function commitChanges(repoPath, message, amend, sshSign) {
+  return invoke("commit_changes", { repoPath, message, amend, sshSign });
 }

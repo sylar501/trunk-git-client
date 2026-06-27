@@ -51,6 +51,11 @@
      Red/amber buttons use the theme-tinted --red-bg/--amber-bg instead. */
   --btn-blue-bg:        #185FA5;
   --btn-blue-border:    #0C447C;
+  /* Blue-outline (PRD §5 "secondary constructive") — dark-theme equivalent of the spec's
+     light-theme #E6F1FB/#378ADD pair, not literally specified for dark mode anywhere in the
+     PRD; picked to match the existing --blue-bg/--blue tinted-background pattern. */
+  --btn-blue-outline-bg:     var(--blue-bg);
+  --btn-blue-outline-border: var(--blue);
   --btn-green-bg:       #3B6D11;
   --btn-green-border:   #27500A;
   --btn-neutral-bg:     var(--bg-tertiary);

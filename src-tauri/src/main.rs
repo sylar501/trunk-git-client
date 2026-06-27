@@ -38,6 +38,16 @@ fn main() {
             commands::create_branch_at,
             commands::get_settings,
             commands::save_settings,
+            commands::get_working_tree_status,
+            commands::get_working_file_diff,
+            commands::stage_file,
+            commands::unstage_file,
+            commands::stage_hunk,
+            commands::unstage_hunk,
+            commands::stage_line,
+            commands::unstage_line,
+            commands::get_last_commit_message,
+            commands::commit_changes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running trunk");

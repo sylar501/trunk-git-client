@@ -1,5 +1,7 @@
 <!doctype html>
-<!-- Staging view shell — Session 1 placeholder only. Built out in its own session (PRD §4.4, §8). -->
+<!-- Staging & committing view (SPEC.md item 5, PRD §4.4 §8). Keeps the shared sidebar shell
+     (consistent with index.html) — the three-column file list / hunk diff / commit panel
+     layout fills the remaining width, not the whole window. -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -8,9 +10,13 @@
   <link rel="stylesheet" href="styles/components.css" />
 </head>
 <body>
-  <div class="app">
-    <!-- file list / hunk diff / commit panel three-column layout lands later -->
+  <div class="app" style="display:flex;height:100vh;">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="resize-handle" id="sidebar-resize"></div>
+    <div class="stg-root" id="staging-root" style="flex:1;display:flex;overflow:hidden;">
+      <!-- three-column staging layout renders here (js/staging-view.js) -->
+    </div>
   </div>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/staging-page.js"></script>
 </body>
 </html>

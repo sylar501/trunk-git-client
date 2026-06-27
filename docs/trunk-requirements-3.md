@@ -210,7 +210,7 @@ Trunk ships with two built-in interaction profiles selectable from preferences: 
 
 -   Commit panel: message textarea (no character limit), staged summary stats, options (amend, SSH sign, push after commit), author display, branch display.
 
--   Primary button: solid blue \"commit to main\". Secondary: blue-outline \"amend last commit\".
+-   Single commit button (revised during Session 5 implementation from this section's original two-button "Primary ... Secondary ..." wording): unchecked amend → solid blue \"commit to \<branch\>\"; checked amend → the *same* button relabels/restyles to blue-outline \"amend last commit\". No separate always-visible \"amend last commit\" button.
 
 -   No character limit or counter on the commit message subject line.
 

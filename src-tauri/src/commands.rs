@@ -352,9 +352,82 @@ pub fn save_settings(
     app: AppHandle,
     sidebar_width: Option<f64>,
     commit_overlay_width: Option<f64>,
+    staging_files_width: Option<f64>,
 ) -> Result<(), String> {
-    settings::save(&app, sidebar_width, commit_overlay_width)
+    settings::save(&app, sidebar_width, commit_overlay_width, staging_files_width)
 }
 
-// Reserved for future sessions: staging, branch/tag/stash/remote CRUD, push/fetch/pull,
+// --- Staging & committing (PRD §4.4, §8, SPEC.md item 5) ----------------------------------
+
+/// `async` + `spawn_blocking` for the same reason as `open_graph`/`get_commit_detail` — a large
+/// working tree's status walk shouldn't freeze the webview's main thread.
+#[tauri::command]
+pub async fn get_working_tree_status(repo_path: String) -> Result<git::WorkingTreeStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.working_tree_status()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_working_file_diff(repo_path: String, file_path: String) -> Result<git::FileHunkDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.working_file_diff(&file_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn stage_file(repo_path: String, file_path: String) -> Result<(), String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.stage_file(&file_path)
+}
+
+#[tauri::command]
+pub fn unstage_file(repo_path: String, file_path: String) -> Result<(), String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.unstage_file(&file_path)
+}
+
+#[tauri::command]
+pub fn stage_hunk(repo_path: String, file_path: String, new_start: u32) -> Result<(), String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.stage_hunk(&file_path, new_start)
+}
+
+#[tauri::command]
+pub fn unstage_hunk(repo_path: String, file_path: String, old_start: u32) -> Result<(), String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.unstage_hunk(&file_path, old_start)
+}
+
+#[tauri::command]
+pub fn stage_line(repo_path: String, file_path: String, new_start: u32, line_index_in_hunk: u32) -> Result<(), String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.stage_line(&file_path, new_start, line_index_in_hunk)
+}
+
+#[tauri::command]
+pub fn unstage_line(repo_path: String, file_path: String, old_start: u32, line_index_in_hunk: u32) -> Result<(), String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.unstage_line(&file_path, old_start, line_index_in_hunk)
+}
+
+#[tauri::command]
+pub fn get_last_commit_message(repo_path: String) -> Result<Option<String>, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.last_commit_message()
+}
+
+#[tauri::command]
+pub fn commit_changes(repo_path: String, message: String, amend: bool, ssh_sign: bool) -> Result<String, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.commit_changes(&message, amend, ssh_sign)
+}
+
+// Reserved for future sessions: branch/tag/stash/remote CRUD, push/fetch/pull,
 // interactive rebase, conflict resolution, terminal pty I/O (see git/terminal modules).
