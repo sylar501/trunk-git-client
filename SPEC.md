@@ -204,7 +204,7 @@ rather than inventing a per-panel variant:
   - Continue (blue) disabled until every file resolved. Escape/Abort cancels with no git
     operations applied and restores the working tree.
 
-## 7. Push / Fetch / Pull dialogs — §12
+## 7. [x] Push / Fetch / Pull dialogs — §12 — Session 7
 
 - **Frontend**: 3 small modal dialogs (shared header/body/footer chrome)
 - **Backend**: push (incl. force/`--force-with-lease`), fetch (incl. prune/tags/submodules), pull
