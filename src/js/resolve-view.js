@@ -217,13 +217,21 @@ export async function mountConflictResolver(root, repoPath, { onDone, mergedHeig
     renderMergedPanel(fs);
   }
 
+  // Any per-hunk action (accept ours/theirs/both, or undo) hands control back to the composed
+  // view, discarding a manual override if one was active — both are "the user is using the
+  // structured per-hunk UI now," not just undo. Without this, accepting a hunk while manual
+  // mode was active silently updated `hunkChoices` but left the merged-result panel showing the
+  // stale `manualText` snapshot until an undo happened to reset `fileMode` first.
+  function exitManualMode(fs) {
+    if (fs.fileMode !== "manual") return;
+    fs.fileMode = "composed";
+    fs.manualText = null;
+    fs.panelView = "preview";
+  }
+
   function undoHunk(fs, index) {
     fs.hunkChoices[index] = null;
-    if (fs.fileMode === "manual") {
-      fs.fileMode = "composed";
-      fs.manualText = null;
-      fs.panelView = "preview";
-    }
+    exitManualMode(fs);
     renderFileEditor(selectedPath);
   }
 
@@ -251,6 +259,7 @@ export async function mountConflictResolver(root, repoPath, { onDone, mergedHeig
           choice: fs.hunkChoices[i],
           onChoose: (choice) => {
             fs.hunkChoices[i] = choice;
+            exitManualMode(fs);
             renderTabs();
             renderProgress();
             renderFileEditor(path);
