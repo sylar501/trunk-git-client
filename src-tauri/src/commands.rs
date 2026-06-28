@@ -53,8 +53,12 @@ pub fn open_repository(
     Ok(handle)
 }
 
+/// `async` + `spawn_blocking` for the conflict scan below — same reason as `open_graph`/
+/// `list_branches`: opening every repo in the workspace (PRD §4.6/§9, SPEC.md item 6, see
+/// "instant sidebar conflict badges" requirement) is individually cheap but adds up for a
+/// workspace with many repos, and shouldn't freeze the webview's main thread while it runs.
 #[tauri::command]
-pub fn open_workspace(
+pub async fn open_workspace(
     app: AppHandle,
     state: State<'_, Mutex<AppState>>,
     path: String,
@@ -68,9 +72,34 @@ pub fn open_workspace(
         s.active_repo = session.active_repo.clone();
         s.repo_path = None;
     }
-    if let Some(active_repo) = &session.active_repo {
-        resync_conflict_state(&state, active_repo);
+
+    // Scans every repo, not just the one becoming active, so the sidebar's conflict badges are
+    // accurate the instant the workspace opens — not just for whichever repo you happen to
+    // click into first. Best-effort per repo (an unreadable/stale path just reports `false`),
+    // mirroring `resync_conflict_state`'s single-repo behaviour.
+    let repo_paths: Vec<String> = session.repos.iter().map(|r| r.path.clone()).collect();
+    let conflict_results = tauri::async_runtime::spawn_blocking(move || {
+        repo_paths
+            .into_iter()
+            .map(|p| {
+                let conflicted = git::Repo::open(&p).map(|r| r.has_conflict()).unwrap_or(false);
+                (p, conflicted)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    {
+        let mut s = state.lock().unwrap();
+        for (p, conflicted) in conflict_results {
+            if conflicted {
+                s.conflicted_repos.insert(p);
+            } else {
+                s.conflicted_repos.remove(&p);
+            }
+        }
     }
+
     recent::record(&app, &path, RecentKind::Workspace)?;
     Ok(session)
 }
