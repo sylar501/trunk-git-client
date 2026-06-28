@@ -16,6 +16,7 @@ pub struct AppSettings {
     pub sidebar_width: f64,
     pub commit_overlay_width: f64,
     pub staging_files_width: f64,
+    pub resolve_merged_height: f64,
 }
 
 impl Default for AppSettings {
@@ -24,6 +25,7 @@ impl Default for AppSettings {
             sidebar_width: 156.0,
             commit_overlay_width: 264.0,
             staging_files_width: 196.0,
+            resolve_merged_height: 220.0,
         }
     }
 }
@@ -52,11 +54,13 @@ fn merge(
     sidebar_width: Option<f64>,
     commit_overlay_width: Option<f64>,
     staging_files_width: Option<f64>,
+    resolve_merged_height: Option<f64>,
 ) -> AppSettings {
     AppSettings {
         sidebar_width: sidebar_width.unwrap_or(base.sidebar_width),
         commit_overlay_width: commit_overlay_width.unwrap_or(base.commit_overlay_width),
         staging_files_width: staging_files_width.unwrap_or(base.staging_files_width),
+        resolve_merged_height: resolve_merged_height.unwrap_or(base.resolve_merged_height),
     }
 }
 
@@ -68,8 +72,9 @@ pub fn save(
     sidebar_width: Option<f64>,
     commit_overlay_width: Option<f64>,
     staging_files_width: Option<f64>,
+    resolve_merged_height: Option<f64>,
 ) -> Result<(), String> {
-    let merged = merge(load(app), sidebar_width, commit_overlay_width, staging_files_width);
+    let merged = merge(load(app), sidebar_width, commit_overlay_width, staging_files_width, resolve_merged_height);
     let path = settings_file_path(app)?;
     let contents = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     std::fs::write(&path, contents).map_err(|e| e.to_string())
@@ -81,22 +86,31 @@ mod tests {
 
     #[test]
     fn merge_overwrites_only_the_provided_field() {
-        let base = AppSettings { sidebar_width: 156.0, commit_overlay_width: 264.0, staging_files_width: 196.0 };
+        let base = AppSettings {
+            sidebar_width: 156.0,
+            commit_overlay_width: 264.0,
+            staging_files_width: 196.0,
+            resolve_merged_height: 220.0,
+        };
 
-        let sidebar_only = merge(base, Some(200.0), None, None);
+        let sidebar_only = merge(base, Some(200.0), None, None, None);
         assert_eq!(sidebar_only.sidebar_width, 200.0);
         assert_eq!(sidebar_only.commit_overlay_width, 264.0);
         assert_eq!(sidebar_only.staging_files_width, 196.0);
 
-        let overlay_only = merge(base, None, Some(320.0), None);
+        let overlay_only = merge(base, None, Some(320.0), None, None);
         assert_eq!(overlay_only.sidebar_width, 156.0);
         assert_eq!(overlay_only.commit_overlay_width, 320.0);
 
-        let files_only = merge(base, None, None, Some(240.0));
+        let files_only = merge(base, None, None, Some(240.0), None);
         assert_eq!(files_only.staging_files_width, 240.0);
         assert_eq!(files_only.sidebar_width, 156.0);
 
-        let neither = merge(base, None, None, None);
+        let merged_height_only = merge(base, None, None, None, Some(300.0));
+        assert_eq!(merged_height_only.resolve_merged_height, 300.0);
+        assert_eq!(merged_height_only.sidebar_width, 156.0);
+
+        let neither = merge(base, None, None, None, None);
         assert_eq!(neither, base);
     }
 
@@ -109,5 +123,6 @@ mod tests {
         assert_eq!(partial.sidebar_width, 200.0);
         assert_eq!(partial.commit_overlay_width, AppSettings::default().commit_overlay_width);
         assert_eq!(partial.staging_files_width, AppSettings::default().staging_files_width);
+        assert_eq!(partial.resolve_merged_height, AppSettings::default().resolve_merged_height);
     }
 }

@@ -213,9 +213,15 @@ async function renderRecentList() {
 const FAST_PATH_ENABLED = true;
 
 async function init() {
+  // Set by sidebar.js's "Open another repository or workspace…" before navigating here — an
+  // explicit request to land on the welcome screen itself, not to be immediately bounced back
+  // to the same recent entry by the fast path below.
+  const skipFastPath = sessionStorage.getItem("trunk-skip-fast-path");
+  sessionStorage.removeItem("trunk-skip-fast-path");
+
   const entries = await listRecent();
   const newest = entries[0];
-  if (FAST_PATH_ENABLED && newest && !newest.stale) {
+  if (FAST_PATH_ENABLED && !skipFastPath && newest && !newest.stale) {
     await openRecentEntry(newest);
     return;
   }

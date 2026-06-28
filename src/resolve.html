@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- Conflict resolver (SPEC.md item 6, PRD §4.6/§9). Keeps the shared sidebar shell, consistent
+     with staging.html/index.html — the full-screen resolver fills the remaining width. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Trunk — Resolve conflicts</title>
+  <link rel="stylesheet" href="styles/dark.css" />
+  <link rel="stylesheet" href="styles/components.css" />
+</head>
+<body>
+  <div class="app" style="display:flex;height:100vh;">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="resize-handle" id="sidebar-resize"></div>
+    <div class="rsv-root" id="resolve-root" style="flex:1;display:flex;overflow:hidden;">
+      <!-- full-screen conflict resolver renders here (js/resolve-view.js) -->
+    </div>
+  </div>
+  <script type="module" src="js/resolve-page.js"></script>
+</body>
+</html>

@@ -1,32 +1,38 @@
-// Shared drag-to-resize mechanics for the sidebar and commit-detail-overlay width handles —
-// both are "drag a thin strip, resize a panel, clamp, persist on release," differing only in
-// which edge the handle sits on (hence `invert`). Persisting only happens once per completed
-// drag (`onResizeEnd`, fired on mouseup), not on every mousemove.
+// Shared drag-to-resize mechanics for the sidebar, commit-detail-overlay, staging-files, and
+// conflict-resolver merged-result-panel handles — all are "drag a thin strip, resize a panel,
+// clamp, persist on release," differing only in which axis the drag reads from (`axis`) and
+// which edge the handle sits on (`invert`). Persisting only happens once per completed drag
+// (`onResizeEnd`, fired on mouseup), not on every mousemove.
 
 /**
  * @param {HTMLElement} handleEl
  * @param {{
- *   getWidth: () => number, setWidth: (w: number) => void,
+ *   getWidth: () => number, setWidth: (w: number) => void - named for the common (horizontal)
+ *     case; with `axis: "y"` these get/set a height instead, the mechanics are identical.
  *   min: number, max: number,
- *   invert?: boolean - true when dragging *left* should grow the panel (a handle on its left
- *     edge, e.g. the commit overlay) instead of dragging *right* (a handle on its right edge,
- *     e.g. the sidebar).
+ *   axis?: "x"|"y" - "x" (default) reads `clientX` for a vertical strip between two
+ *     side-by-side panels; "y" reads `clientY` for a horizontal strip between two stacked
+ *     panels (e.g. the conflict resolver's merged-result panel, anchored above its handle).
+ *   invert?: boolean - true when dragging toward the *start* of the axis (left for x, up for y)
+ *     should grow the panel (a handle on that edge, e.g. the commit overlay's left edge or the
+ *     merged-result panel's top edge) instead of growing when dragging toward the end.
  *   onResizeEnd?: (finalWidth: number) => void,
  *   signal?: AbortSignal
  * }} opts
  */
-export function attachResizeHandle(handleEl, { getWidth, setWidth, min, max, invert = false, onResizeEnd, signal } = {}) {
+export function attachResizeHandle(handleEl, { getWidth, setWidth, min, max, axis = "x", invert = false, onResizeEnd, signal } = {}) {
   handleEl.addEventListener(
     "mousedown",
     (e) => {
       e.preventDefault();
-      const startX = e.clientX;
+      const startPos = axis === "y" ? e.clientY : e.clientX;
       const startWidth = getWidth();
       let currentWidth = startWidth;
       handleEl.classList.add("active");
 
       function onMouseMove(ev) {
-        const delta = invert ? startX - ev.clientX : ev.clientX - startX;
+        const pos = axis === "y" ? ev.clientY : ev.clientX;
+        const delta = invert ? startPos - pos : pos - startPos;
         currentWidth = Math.max(min, Math.min(max, startWidth + delta));
         setWidth(currentWidth);
       }

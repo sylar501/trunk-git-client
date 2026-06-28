@@ -8,8 +8,37 @@
 import { switchActiveRepository, getAppState, listBranches } from "./app.js";
 import { openContextMenu } from "../components/context-menu.js";
 import { showToast } from "../components/toast.js";
+import { openDialog } from "../components/dialog.js";
 import { createSidebarItem, createSidebarSection } from "../components/sidebar-item.js";
 import { laneColorVar } from "../components/commit-row.js";
+
+/// Mid-conflict-resolution repo switch (PRD §15.4.4, line 540) warns instead of blocking —
+/// unlike `rebase_in_progress`, which `switch_active_repository` hard-rejects server-side with
+/// no override. Conflict markers on disk are left untouched either way; this only gates whether
+/// Trunk's UI navigates away from them.
+function confirmSwitchAwayFromConflict() {
+  return new Promise((resolve) => {
+    const dlg = openDialog({
+      icon: "⚠",
+      iconVariant: "amber",
+      title: "Unresolved merge conflict",
+      bodyHtml: `<p>This repository has an unresolved merge conflict. Switch away and return to it later?</p>`,
+      footerHtml: `
+        <div class="btn btn-neutral" id="csc-cancel">Cancel</div>
+        <div class="btn btn-amber" id="csc-switch">Switch anyway</div>
+      `,
+      size: "small",
+    });
+    dlg.footerEl.querySelector("#csc-cancel").addEventListener("click", () => {
+      dlg.close();
+      resolve(false);
+    });
+    dlg.footerEl.querySelector("#csc-switch").addEventListener("click", () => {
+      dlg.close();
+      resolve(true);
+    });
+  });
+}
 
 function basename(path) {
   return path.replace(/\/+$/, "").split("/").pop() || path;
@@ -21,6 +50,11 @@ function openBackToWelcomeMenu(e) {
     {
       label: "Open another repository or workspace…",
       onClick: () => {
+        // Without this, welcome.js's fast path (PRD §15.1) sees the same most-recently-opened
+        // entry still on top of the recent list and immediately reopens it — the welcome screen
+        // flashes for a frame and this menu item becomes a no-op. `welcome.js`'s `init()` checks
+        // and clears this flag before deciding whether to fast-path.
+        sessionStorage.setItem("trunk-skip-fast-path", "1");
         window.location.href = "welcome.html";
       },
     },
@@ -107,6 +141,12 @@ export async function renderSidebar(container, appState, handlers = {}) {
     row.className = repo.stale ? "sb-item stale" : repo.active ? "sb-item active" : "sb-item";
     row.innerHTML = `<span class="sb-dot"></span><span class="sb-name"></span><span class="sb-badge" hidden></span>`;
     row.querySelector(".sb-name").textContent = repo.name;
+    if (repo.conflicted) {
+      const badge = row.querySelector(".sb-badge");
+      badge.hidden = false;
+      badge.classList.add("sb-badge-amber");
+      badge.textContent = "conflict";
+    }
     if (!repo.stale) {
       row.addEventListener("click", async () => {
         // Switching itself (writing `.trunk`, updating AppState) is fast — the slow part is
@@ -115,6 +155,10 @@ export async function renderSidebar(container, appState, handlers = {}) {
         // and ignore further clicks until this one resolves instead of piling up redundant
         // switches.
         if (switching) return;
+        if (appState.conflict_resolution_in_progress) {
+          const proceed = await confirmSwitchAwayFromConflict();
+          if (!proceed) return;
+        }
         switching = true;
         row.querySelector(".sb-dot").outerHTML = `<div class="spinner"></div>`;
         try {

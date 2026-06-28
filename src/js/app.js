@@ -95,12 +95,28 @@ export async function createBranchAt(repoPath, sha, name) {
   return invoke("create_branch_at", { repoPath, sha, name });
 }
 
+export async function getConflictStatus(repoPath) {
+  return invoke("get_conflict_status", { repoPath });
+}
+
+export async function getConflictFile(repoPath, filePath) {
+  return invoke("get_conflict_file", { repoPath, filePath });
+}
+
+export async function finishConflictResolution(repoPath, files) {
+  return invoke("finish_conflict_resolution", { repoPath, files });
+}
+
+export async function abortConflictResolution(repoPath) {
+  return invoke("abort_conflict_resolution", { repoPath });
+}
+
 export async function getSettings() {
   return invoke("get_settings");
 }
 
-export async function saveSettings({ sidebarWidth, commitOverlayWidth, stagingFilesWidth } = {}) {
-  return invoke("save_settings", { sidebarWidth, commitOverlayWidth, stagingFilesWidth });
+export async function saveSettings({ sidebarWidth, commitOverlayWidth, stagingFilesWidth, resolveMergedHeight } = {}) {
+  return invoke("save_settings", { sidebarWidth, commitOverlayWidth, stagingFilesWidth, resolveMergedHeight });
 }
 
 export async function getWorkingTreeStatus(repoPath) {

@@ -16,6 +16,23 @@ use tauri::{AppHandle, Manager, State};
 /// being viewed at a time (PRD §15).
 pub type GraphState = Mutex<Option<(String, git::GraphCache)>>;
 
+/// Resyncs `AppState.conflicted_repos` for one repo from disk (see that field's doc comment in
+/// `state.rs`) — called whenever a repo becomes active so a conflict left over from outside
+/// Trunk is picked up immediately. Best-effort: an unreadable repo just leaves the set
+/// unchanged rather than failing whatever command called this as a side effect. `Repo::open` +
+/// `has_conflict` is cheap (no graph walk), so this runs inline rather than via `spawn_blocking`,
+/// same as the other lightweight synchronous commands in this file (`switch_active_repository`,
+/// `add_existing_repository`).
+fn resync_conflict_state(state: &Mutex<AppState>, repo_path: &str) {
+    let conflicted = git::Repo::open(repo_path).map(|r| r.has_conflict()).unwrap_or(false);
+    let mut s = state.lock().unwrap();
+    if conflicted {
+        s.conflicted_repos.insert(repo_path.to_string());
+    } else {
+        s.conflicted_repos.remove(repo_path);
+    }
+}
+
 #[tauri::command]
 pub fn open_repository(
     app: AppHandle,
@@ -31,6 +48,7 @@ pub fn open_repository(
         s.workspace = None;
         s.active_repo = None;
     }
+    resync_conflict_state(&state, &path);
     recent::record(&app, &path, RecentKind::Repository)?;
     Ok(handle)
 }
@@ -49,6 +67,9 @@ pub fn open_workspace(
         s.workspace = Some(session.workspace.clone());
         s.active_repo = session.active_repo.clone();
         s.repo_path = None;
+    }
+    if let Some(active_repo) = &session.active_repo {
+        resync_conflict_state(&state, active_repo);
     }
     recent::record(&app, &path, RecentKind::Workspace)?;
     Ok(session)
@@ -141,7 +162,9 @@ pub fn switch_active_repository(
         .ok_or("Not in workspace mode.".to_string())?;
     let wf = workspace::set_active_repository(&workspace_path, &repo_path)?;
     s.workspace = Some(wf);
-    s.active_repo = Some(repo_path);
+    s.active_repo = Some(repo_path.clone());
+    drop(s);
+    resync_conflict_state(&state, &repo_path);
     Ok(())
 }
 
@@ -159,7 +182,9 @@ pub fn add_existing_repository(
         .ok_or("Not in workspace mode.".to_string())?;
     let wf = workspace::add_repository_to_workspace(&workspace_path, &repo_path)?;
     s.workspace = Some(wf.clone());
-    s.active_repo = Some(repo_path);
+    s.active_repo = Some(repo_path.clone());
+    drop(s);
+    resync_conflict_state(&state, &repo_path);
     Ok(wf)
 }
 
@@ -310,24 +335,114 @@ pub async fn get_commit_file_diff(
     .map_err(|e| e.to_string())?
 }
 
+/// Rejects starting a cherry-pick/revert on a repo that already has a conflict from a previous
+/// one unresolved — same hard-block, no-override shape as `switch_active_repository`'s
+/// `rebase_in_progress` check above, since starting another one on top would stack two
+/// in-progress operations into the same index. Scoped to `repo_path` specifically — a conflict
+/// in some *other* repo in the workspace doesn't block this one.
+fn guard_no_conflict_in_progress(state: &State<'_, Mutex<AppState>>, repo_path: &str) -> Result<(), String> {
+    if state.lock().unwrap().conflicted_repos.contains(repo_path) {
+        return Err("Resolve the current conflict before starting another operation.".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn cherry_pick_commit(repo_path: String, sha: String) -> Result<String, String> {
+pub async fn cherry_pick_commit(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    sha: String,
+) -> Result<git::ConflictableOutcome, String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    let path_for_open = repo_path.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.cherry_pick(&sha)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if matches!(outcome, git::ConflictableOutcome::Conflict) {
+        state.lock().unwrap().conflicted_repos.insert(repo_path);
+    }
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub async fn revert_commit(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    sha: String,
+) -> Result<git::ConflictableOutcome, String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    let path_for_open = repo_path.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.revert_commit(&sha)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if matches!(outcome, git::ConflictableOutcome::Conflict) {
+        state.lock().unwrap().conflicted_repos.insert(repo_path);
+    }
+    Ok(outcome)
+}
+
+// --- Conflict resolver (PRD §4.6/§9, SPEC.md item 6) --------------------------------------
+
+#[tauri::command]
+pub async fn get_conflict_status(repo_path: String) -> Result<Option<git::ConflictSession>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.cherry_pick(&sha)
+        repo.conflict_status()
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn revert_commit(repo_path: String, sha: String) -> Result<String, String> {
+pub async fn get_conflict_file(
+    repo_path: String,
+    file_path: String,
+) -> Result<Vec<git::ConflictSegment>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.revert_commit(&sha)
+        repo.conflict_file(&file_path)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn finish_conflict_resolution(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    files: Vec<git::ResolvedFile>,
+) -> Result<String, String> {
+    let path_for_open = repo_path.clone();
+    let sha = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.finish_conflict_resolution(files)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.lock().unwrap().conflicted_repos.remove(&repo_path);
+    Ok(sha)
+}
+
+#[tauri::command]
+pub async fn abort_conflict_resolution(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+) -> Result<(), String> {
+    let path_for_open = repo_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.abort_conflict_resolution()
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.lock().unwrap().conflicted_repos.remove(&repo_path);
+    Ok(())
 }
 
 #[tauri::command]
@@ -353,8 +468,9 @@ pub fn save_settings(
     sidebar_width: Option<f64>,
     commit_overlay_width: Option<f64>,
     staging_files_width: Option<f64>,
+    resolve_merged_height: Option<f64>,
 ) -> Result<(), String> {
-    settings::save(&app, sidebar_width, commit_overlay_width, staging_files_width)
+    settings::save(&app, sidebar_width, commit_overlay_width, staging_files_width, resolve_merged_height)
 }
 
 // --- Staging & committing (PRD §4.4, §8, SPEC.md item 5) ----------------------------------

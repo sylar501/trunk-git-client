@@ -34,12 +34,18 @@ function debounce(fn, ms) {
  *     defaults to 264 if not supplied.
  *   onOverlayResize?: (width: number) => void - fired once per completed drag (not per
  *     mousemove) so the caller can persist it via `saveSettings()`.
+ *   conflicted?: boolean - this repo has an unresolved conflict (PRD §4.6/§9, SPEC.md item 6),
+ *     i.e. `appState.conflict_resolution_in_progress` for the active repo. Swaps the toolbar's
+ *     "Stage changes" button for "Resolve conflicts" — staging doesn't make sense with unmerged
+ *     paths in the index, and there's no auto-redirect into the resolver on landing here (only
+ *     the cherry-pick/revert action that *produces* a conflict auto-enters it, see `onCherryPick`/
+ *     `onRevert` below) — this button is the deliberate, user-invoked way back in otherwise.
  * }} opts - `onMutated` is called after a successful cherry-pick/revert/branch-from-here so the
  *   caller can refresh sidebar+graph together (see `index-page.js`) — one shared refresh path
  *   for all three, rather than this module guessing which mutation needs which slice of a
  *   refresh.
  */
-export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: initialOverlayWidth, onOverlayResize } = {}) {
+export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: initialOverlayWidth, onOverlayResize, conflicted = false } = {}) {
   // `mountGraph` can be called again on the same `canvas` (every refresh remounts) — abort the
   // previous call's document-level listeners (Escape, outside-click) before attaching new ones,
   // since those aren't scoped to anything `canvas.innerHTML` below would otherwise clean up.
@@ -56,7 +62,11 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
       <div class="fpill" data-quick="week">this week</div>
       <div class="fpill" id="g-toggle-filters">filters</div>
       <div class="tb-spacer"></div>
-      <div class="btn btn-green disabled" id="g-stage">Stage changes</div>
+      ${
+        conflicted
+          ? '<div class="btn btn-amber" id="g-stage">Resolve conflicts</div>'
+          : '<div class="btn btn-green disabled" id="g-stage">Stage changes</div>'
+      }
       <div class="btn btn-neutral disabled" id="g-rebase">rebase</div>
     </div>
     <div class="tb-filters" id="g-filters" hidden>
@@ -80,9 +90,16 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
   // Commit detail overlay (PRD §4.3, SPEC.md item 4) — a sibling of `sizer`, not a child of it,
   // so it pins to `body`'s visible viewport instead of scrolling away with the recycled row
   // pool (see commit-overlay.js's own header comment for the full reasoning).
+  // A `Conflict` outcome (PRD §4.6/§9, SPEC.md item 6) isn't an error — it's a handoff to the
+  // full-screen conflict resolver, which replaces this view entirely (same hard-page-load
+  // pattern `staging.html` uses), so there's nothing left here to refresh.
   async function onCherryPick({ sha }) {
     try {
-      await cherryPickCommit(repoPath, sha);
+      const outcome = await cherryPickCommit(repoPath, sha);
+      if (outcome.status === "conflict") {
+        window.location.href = "resolve.html";
+        return;
+      }
       showToast({ variant: "success", message: "Commit cherry-picked." });
       await onMutated?.();
     } catch (err) {
@@ -92,7 +109,11 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
 
   async function onRevert({ sha }) {
     try {
-      await revertCommit(repoPath, sha);
+      const outcome = await revertCommit(repoPath, sha);
+      if (outcome.status === "conflict") {
+        window.location.href = "resolve.html";
+        return;
+      }
       showToast({ variant: "success", message: "Commit reverted." });
       await onMutated?.();
     } catch (err) {
@@ -178,15 +199,19 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
 
   // ⌘⇧S / Ctrl+Shift+S → staging view (PRD §4.4, §6, SPEC.md item 5) — the first real
   // keybinding in this codebase beyond per-view Escape, so there's no existing Mac/non-Mac
-  // normalization convention to copy; just accept either modifier key.
+  // normalization convention to copy; just accept either modifier key. While conflicted, this
+  // shortcut is a no-op — the button it would otherwise activate is "Resolve conflicts", not
+  // "Stage changes", and staging doesn't make sense with unmerged paths in the index anyway.
   const stageBtn = canvas.querySelector("#g-stage");
   let hasPendingChanges = false;
 
   function goToStaging() {
-    if (!hasPendingChanges) return;
+    if (conflicted || !hasPendingChanges) return;
     window.location.href = "staging.html";
   }
-  stageBtn.addEventListener("click", goToStaging, { signal });
+  stageBtn.addEventListener("click", conflicted ? () => (window.location.href = "resolve.html") : goToStaging, {
+    signal,
+  });
   document.addEventListener(
     "keydown",
     (e) => {
@@ -201,18 +226,21 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
   // Reflects the working tree's current file count on the button itself — "stage changes
   // (1432)" — disabled at zero so there's nothing to navigate to. No file-watcher yet (same
   // limitation noted elsewhere in this codebase), so this is a one-shot check on mount/refresh,
-  // not a live count.
-  getWorkingTreeStatus(repoPath)
-    .then((status) => {
-      const count = status.files.length;
-      hasPendingChanges = count > 0;
-      stageBtn.textContent = count > 0 ? `Stage changes (${count})` : "Stage changes";
-      stageBtn.classList.toggle("disabled", !hasPendingChanges);
-    })
-    .catch(() => {
-      hasPendingChanges = false;
-      stageBtn.classList.add("disabled");
-    });
+  // not a live count. Skipped entirely while conflicted — the button isn't "Stage changes" and
+  // doesn't need a pending-file count.
+  if (!conflicted) {
+    getWorkingTreeStatus(repoPath)
+      .then((status) => {
+        const count = status.files.length;
+        hasPendingChanges = count > 0;
+        stageBtn.textContent = count > 0 ? `Stage changes (${count})` : "Stage changes";
+        stageBtn.classList.toggle("disabled", !hasPendingChanges);
+      })
+      .catch(() => {
+        hasPendingChanges = false;
+        stageBtn.classList.add("disabled");
+      });
+  }
 
   let totalCount = 0;
   let filter = {};

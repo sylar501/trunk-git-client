@@ -41,12 +41,36 @@ impl Repo {
         commit_file_diff(&self.inner, sha, file_path)
     }
 
-    pub fn cherry_pick(&self, sha: &str) -> Result<String, String> {
+    pub fn cherry_pick(&self, sha: &str) -> Result<ConflictableOutcome, String> {
         cherry_pick(&self.inner, sha)
     }
 
-    pub fn revert_commit(&self, sha: &str) -> Result<String, String> {
+    pub fn revert_commit(&self, sha: &str) -> Result<ConflictableOutcome, String> {
         revert_commit(&self.inner, sha)
+    }
+
+    /// Cheap (no graph walk, just a handful of ref/file reads) — safe to call every time a repo
+    /// becomes active so `AppState.conflicted_repos` reflects a conflict left over from outside
+    /// Trunk (a previous session, or a manual `git merge` in a terminal), not only ones Trunk's
+    /// own cherry-pick/revert caused this session.
+    pub fn has_conflict(&self) -> bool {
+        self.inner.state() != git2::RepositoryState::Clean
+    }
+
+    pub fn conflict_status(&self) -> Result<Option<ConflictSession>, String> {
+        conflict_status(&self.inner)
+    }
+
+    pub fn conflict_file(&self, file_path: &str) -> Result<Vec<ConflictSegment>, String> {
+        conflict_file(&self.inner, file_path)
+    }
+
+    pub fn finish_conflict_resolution(&self, files: Vec<ResolvedFile>) -> Result<String, String> {
+        finish_conflict_resolution(&self.inner, files)
+    }
+
+    pub fn abort_conflict_resolution(&self) -> Result<(), String> {
+        abort_in_progress_operation(&self.inner).map_err(|e| e.to_string())
     }
 
     pub fn create_branch_at(&self, sha: &str, name: &str) -> Result<(), String> {
@@ -712,11 +736,31 @@ fn abort_in_progress_operation(repo: &Repository) -> Result<(), git2::Error> {
     repo.cleanup_state()
 }
 
+/// Outcome of a cherry-pick/revert attempt — `Conflict` means libgit2 has already written
+/// diff3-marker-annotated files into the working tree and left index conflict entries in place
+/// (SPEC.md item 6, PRD §9): unlike the old behaviour, this is *not* an error to recover from,
+/// it's a handoff to the conflict resolver. Caller is responsible for setting
+/// `AppState.conflict_resolution_in_progress`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ConflictableOutcome {
+    Completed { sha: String },
+    Conflict,
+}
+
 /// Cherry-picks a single commit onto HEAD. Refuses merge commits outright (matching plain `git
 /// cherry-pick`'s own default refusal without `-m` — libgit2 hard-errors rather than defaulting
 /// to a mainline if one isn't specified) and refuses a dirty working tree (see
-/// `is_working_tree_clean`) before calling into libgit2 at all. Returns the new commit's SHA.
-fn cherry_pick(repo: &Repository, sha: &str) -> Result<String, String> {
+/// `is_working_tree_clean`) before calling into libgit2 at all.
+///
+/// On conflicts, leaves the index/working tree exactly as `repo.cherrypick()` produced them
+/// (same as plain `git cherry-pick` would) instead of aborting — `conflict_style_diff3` on the
+/// checkout builder (not the merge options; libgit2's checkout step recomputes each conflicting
+/// file's on-disk content from scratch and only reads this style flag, ignoring whatever the
+/// merge step itself used) makes libgit2 write `<<<<<<<`/`|||||||`/`=======`/`>>>>>>>` markers
+/// straight into the conflicting files, which the conflict resolver reads back via
+/// `get_conflict_file`.
+fn cherry_pick(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
     if commit.parent_count() > 1 {
@@ -731,15 +775,15 @@ fn cherry_pick(repo: &Repository, sha: &str) -> Result<String, String> {
         .peel_to_commit()
         .map_err(|e| e.to_string())?;
 
-    repo.cherrypick(&commit, None).map_err(|e| e.to_string())?;
+    let mut checkout_builder = git2::build::CheckoutBuilder::new();
+    checkout_builder.conflict_style_diff3(true);
+    let mut cherrypick_opts = git2::CherrypickOptions::new();
+    cherrypick_opts.checkout_builder(checkout_builder);
+    repo.cherrypick(&commit, Some(&mut cherrypick_opts)).map_err(|e| e.to_string())?;
 
     let mut index = repo.index().map_err(|e| e.to_string())?;
     if index.has_conflicts() {
-        abort_in_progress_operation(repo).map_err(|e| e.to_string())?;
-        return Err(
-            "This commit can't be cherry-picked without conflicts. The operation was cancelled and your working tree is unchanged."
-                .to_string(),
-        );
+        return Ok(ConflictableOutcome::Conflict);
     }
 
     let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
@@ -751,13 +795,13 @@ fn cherry_pick(repo: &Repository, sha: &str) -> Result<String, String> {
         .commit(Some("HEAD"), &author, &committer, message, &tree, &[&head_commit])
         .map_err(|e| e.to_string())?;
     repo.cleanup_state().map_err(|e| e.to_string())?;
-    Ok(new_oid.to_string())
+    Ok(ConflictableOutcome::Completed { sha: new_oid.to_string() })
 }
 
 /// Reverts a single commit on top of HEAD with a new commit (author = committer = current user,
 /// message matches plain `git revert`'s default format). Same merge-commit and dirty-tree
-/// upfront refusals, and the same conflict-abort shape, as `cherry_pick` above.
-fn revert_commit(repo: &Repository, sha: &str) -> Result<String, String> {
+/// upfront refusals, and the same conflict-handoff shape, as `cherry_pick` above.
+fn revert_commit(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
     if commit.parent_count() > 1 {
@@ -772,15 +816,15 @@ fn revert_commit(repo: &Repository, sha: &str) -> Result<String, String> {
         .peel_to_commit()
         .map_err(|e| e.to_string())?;
 
-    repo.revert(&commit, None).map_err(|e| e.to_string())?;
+    let mut checkout_builder = git2::build::CheckoutBuilder::new();
+    checkout_builder.conflict_style_diff3(true);
+    let mut revert_opts = git2::RevertOptions::new();
+    revert_opts.checkout_builder(checkout_builder);
+    repo.revert(&commit, Some(&mut revert_opts)).map_err(|e| e.to_string())?;
 
     let mut index = repo.index().map_err(|e| e.to_string())?;
     if index.has_conflicts() {
-        abort_in_progress_operation(repo).map_err(|e| e.to_string())?;
-        return Err(
-            "Reverting this commit causes conflicts. The operation was cancelled and your working tree is unchanged."
-                .to_string(),
-        );
+        return Ok(ConflictableOutcome::Conflict);
     }
 
     let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
@@ -793,6 +837,204 @@ fn revert_commit(repo: &Repository, sha: &str) -> Result<String, String> {
     );
     let new_oid = repo
         .commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&head_commit])
+        .map_err(|e| e.to_string())?;
+    repo.cleanup_state().map_err(|e| e.to_string())?;
+    Ok(ConflictableOutcome::Completed { sha: new_oid.to_string() })
+}
+
+// --- Conflict resolver (SPEC.md item 6, PRD §4.6/§9) --------------------------------------
+
+/// One conflicting file's three-way content, already split on the diff3 markers `cherry_pick`/
+/// `revert_commit` asked libgit2 to write. `Context` segments need no resolution; `Conflict`
+/// segments are exactly what the three-panel editor + per-hunk accept controls operate on.
+/// Resolution choices themselves are frontend-only state (composing one of `ours`/`base`/
+/// `theirs`/both, or a manual edit) — nothing here is mutated until `finish_conflict_resolution`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConflictSegment {
+    Context { lines: Vec<String> },
+    Conflict { ours: Vec<String>, base: Vec<String>, theirs: Vec<String> },
+}
+
+/// Snapshot of the operation currently in progress (`repo.state()`-derived, so it survives an
+/// app restart and matches whatever plain `git status` would also report) plus the set of
+/// still-conflicting file paths. `None` means nothing is in progress.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConflictSession {
+    pub operation: String,
+    pub summary: String,
+    pub files: Vec<String>,
+}
+
+/// A single resolved file as sent back by `finish_conflict_resolution` — `content` is the final
+/// marker-free text the frontend composed from its hunk choices (or manual edit).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResolvedFile {
+    pub path: String,
+    pub content: String,
+}
+
+fn conflict_operation_name(state: git2::RepositoryState) -> &'static str {
+    use git2::RepositoryState::*;
+    match state {
+        Merge => "merge",
+        Revert | RevertSequence => "revert",
+        CherryPick | CherryPickSequence => "cherry-pick",
+        Rebase | RebaseInteractive | RebaseMerge => "rebase",
+        _ => "operation",
+    }
+}
+
+fn conflict_status(repo: &Repository) -> Result<Option<ConflictSession>, String> {
+    let state = repo.state();
+    if state == git2::RepositoryState::Clean {
+        return Ok(None);
+    }
+    let operation = conflict_operation_name(state).to_string();
+    let summary = repo.message().unwrap_or_default();
+
+    let index = repo.index().map_err(|e| e.to_string())?;
+    let mut files = Vec::new();
+    for conflict in index.conflicts().map_err(|e| e.to_string())? {
+        let conflict = conflict.map_err(|e| e.to_string())?;
+        let entry = conflict.our.as_ref().or(conflict.their.as_ref()).or(conflict.ancestor.as_ref());
+        if let Some(entry) = entry {
+            files.push(String::from_utf8_lossy(&entry.path).to_string());
+        }
+    }
+    Ok(Some(ConflictSession { operation, summary, files }))
+}
+
+/// Splits a diff3-marker-annotated file's text into context/conflict segments. Marker lines are
+/// matched on the standard 7-character prefixes (`<<<<<<<`/`|||||||`/`=======`/`>>>>>>>`), with
+/// or without a trailing label (libgit2 always adds one, but the bare prefix is matched too in
+/// case a manual edit strips it) — see PRD §9.2/§9.4.
+fn parse_conflict_segments(content: &str) -> Vec<ConflictSegment> {
+    let mut segments = Vec::new();
+    let mut context: Vec<String> = Vec::new();
+    let mut lines = content.lines();
+    while let Some(line) = lines.next() {
+        if line.starts_with("<<<<<<<") {
+            if !context.is_empty() {
+                segments.push(ConflictSegment::Context { lines: std::mem::take(&mut context) });
+            }
+            let mut ours = Vec::new();
+            let mut base = Vec::new();
+            let mut theirs = Vec::new();
+            let mut in_base = false;
+            let mut in_theirs = false;
+            for l in lines.by_ref() {
+                if l.starts_with("|||||||") {
+                    in_base = true;
+                    continue;
+                }
+                if l == "=======" {
+                    in_base = false;
+                    in_theirs = true;
+                    continue;
+                }
+                if l.starts_with(">>>>>>>") {
+                    break;
+                }
+                if in_theirs {
+                    theirs.push(l.to_string());
+                } else if in_base {
+                    base.push(l.to_string());
+                } else {
+                    ours.push(l.to_string());
+                }
+            }
+            segments.push(ConflictSegment::Conflict { ours, base, theirs });
+        } else {
+            context.push(line.to_string());
+        }
+    }
+    if !context.is_empty() {
+        segments.push(ConflictSegment::Context { lines: context });
+    }
+    segments
+}
+
+fn conflict_file(repo: &Repository, file_path: &str) -> Result<Vec<ConflictSegment>, String> {
+    let workdir = repo.workdir().ok_or_else(|| "Bare repositories have no working tree.".to_string())?;
+    let content = std::fs::read_to_string(workdir.join(file_path)).map_err(|e| e.to_string())?;
+    Ok(parse_conflict_segments(&content))
+}
+
+/// Writes every resolved file's final (marker-free) content to the working tree, stages it
+/// (`index.add_path` is what actually clears that path's index conflict entry — the same effect
+/// `git add` has after resolving by hand), and creates the final commit. Which parents/author/
+/// message to use is derived from `repo.state()` plus the operation's own ref
+/// (`CHERRY_PICK_HEAD`/`MERGE_HEAD`) or prepared message file, the same sources plain `git
+/// cherry-pick --continue`/`git merge --continue` read from — so this works whether or not the
+/// app was restarted mid-resolution.
+fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Result<String, String> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| "Bare repositories have no working tree.".to_string())?
+        .to_path_buf();
+    let mut index = repo.index().map_err(|e| e.to_string())?;
+    for file in &files {
+        std::fs::write(workdir.join(&file.path), &file.content).map_err(|e| e.to_string())?;
+        index.add_path(std::path::Path::new(&file.path)).map_err(|e| e.to_string())?;
+    }
+    index.write().map_err(|e| e.to_string())?;
+    if index.has_conflicts() {
+        return Err("Some files still have unresolved conflicts.".to_string());
+    }
+
+    let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
+    let tree = repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
+    let head_commit = repo
+        .head()
+        .map_err(|e| e.to_string())?
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?;
+    let committer = repo.signature().map_err(|e| e.to_string())?;
+    let state = repo.state();
+
+    let (author, raw_message, parents): (git2::Signature<'static>, String, Vec<Oid>) = match state {
+        git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence => {
+            let cherry_commit = repo
+                .find_reference("CHERRY_PICK_HEAD")
+                .map_err(|e| e.to_string())?
+                .peel_to_commit()
+                .map_err(|e| e.to_string())?;
+            let author = cherry_commit.author().to_owned();
+            let message = repo
+                .message()
+                .unwrap_or_else(|_| cherry_commit.message().unwrap_or_default().to_string());
+            (author, message, vec![head_commit.id()])
+        }
+        git2::RepositoryState::Revert | git2::RepositoryState::RevertSequence => {
+            let message = repo.message().map_err(|e| e.to_string())?;
+            (committer.to_owned(), message, vec![head_commit.id()])
+        }
+        git2::RepositoryState::Merge => {
+            let merge_oid = repo
+                .find_reference("MERGE_HEAD")
+                .map_err(|e| e.to_string())?
+                .peel_to_commit()
+                .map_err(|e| e.to_string())?
+                .id();
+            let message = repo.message().unwrap_or_default();
+            (committer.to_owned(), message, vec![head_commit.id(), merge_oid])
+        }
+        _ => return Err("No cherry-pick, revert, or merge is currently in progress.".to_string()),
+    };
+    // `repo.message()` is `.git/MERGE_MSG`, which libgit2 appends a "#Conflicts:" comment
+    // block to once a conflict occurs — strip it the same way `git commit`'s own message editor
+    // would (comment lines starting with `#`) rather than baking that block into the final commit.
+    let message = git2::message_prettify(raw_message, git2::DEFAULT_COMMENT_CHAR).map_err(|e| e.to_string())?;
+
+    let parent_commits: Vec<git2::Commit> = parents
+        .iter()
+        .map(|oid| repo.find_commit(*oid).map_err(|e| e.to_string()))
+        .collect::<Result<_, _>>()?;
+    let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
+
+    let new_oid = repo
+        .commit(Some("HEAD"), &author, &committer, &message, &tree, &parent_refs)
         .map_err(|e| e.to_string())?;
     repo.cleanup_state().map_err(|e| e.to_string())?;
     Ok(new_oid.to_string())
@@ -1891,6 +2133,101 @@ mod tests {
         let c1 = commit_with_file(&repo, &dir, "first message", &[], "a.txt", "x\n");
         let _ = repo.find_commit(c1).unwrap();
         assert_eq!(last_commit_message(&repo).unwrap(), Some("first message".to_string()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- Conflict resolver (SPEC.md item 6, PRD §4.6/§9) ------------------------------------
+
+    /// Builds two branches that both edit `a.txt`'s middle line, diverging from a common base —
+    /// guarantees a same-line content conflict. `main` (HEAD) ends up at the tip carrying "MAIN";
+    /// `feature` carries "FEATURE", never checked out. Returns `(dir, repo, main_tip, feature_oid)`.
+    fn setup_conflicting_branches() -> (std::path::PathBuf, Repository, Oid, Oid) {
+        let (dir, repo) = temp_repo();
+        let base = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\ntwo\nthree\n");
+
+        std::fs::write(dir.join("a.txt"), "one\nFEATURE\nthree\n").unwrap();
+        let feature_oid = {
+            let base_commit = repo.find_commit(base).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+            let tree_oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            let sig = repo.signature().unwrap();
+            repo.commit(Some("refs/heads/feature"), &sig, &sig, "feature change", &tree, &[&base_commit])
+                .unwrap()
+        };
+
+        let main_tip = {
+            let base_commit = repo.find_commit(base).unwrap();
+            commit_with_file(&repo, &dir, "main change", &[&base_commit], "a.txt", "one\nMAIN\nthree\n")
+        };
+        (dir, repo, main_tip, feature_oid)
+    }
+
+    #[test]
+    fn cherry_pick_conflict_is_reported_not_aborted() {
+        let (dir, repo, _main_tip, feature_oid) = setup_conflicting_branches();
+
+        let outcome = cherry_pick(&repo, &feature_oid.to_string()).unwrap();
+        assert!(matches!(outcome, ConflictableOutcome::Conflict));
+        assert!(repo.index().unwrap().has_conflicts(), "conflict must be left in place, not aborted");
+        assert_eq!(repo.state(), git2::RepositoryState::CherryPick);
+
+        let session = conflict_status(&repo).unwrap().expect("a conflict session should be reported");
+        assert_eq!(session.operation, "cherry-pick");
+        assert_eq!(session.files, vec!["a.txt".to_string()]);
+
+        let segments = conflict_file(&repo, "a.txt").unwrap();
+        let (ours, base, theirs) = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Conflict { ours, base, theirs } => Some((ours.clone(), base.clone(), theirs.clone())),
+                _ => None,
+            })
+            .expect("file should contain exactly one conflict segment");
+        assert_eq!(ours, vec!["MAIN".to_string()]);
+        assert_eq!(base, vec!["two".to_string()]);
+        assert_eq!(theirs, vec!["FEATURE".to_string()]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finish_conflict_resolution_commits_resolved_content_and_clears_state() {
+        let (dir, repo, _main_tip, feature_oid) = setup_conflicting_branches();
+        cherry_pick(&repo, &feature_oid.to_string()).unwrap();
+
+        let resolved = vec![ResolvedFile { path: "a.txt".to_string(), content: "one\nFEATURE\nthree\n".to_string() }];
+        let new_sha = finish_conflict_resolution(&repo, resolved).unwrap();
+
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert!(!repo.index().unwrap().has_conflicts());
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id().to_string(), new_sha);
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\nFEATURE\nthree\n");
+        assert_eq!(head.message().unwrap(), "feature change\n", "cherry-pick keeps the original commit message");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn abort_conflict_resolution_restores_pre_cherry_pick_tree() {
+        let (dir, repo, main_tip, feature_oid) = setup_conflicting_branches();
+        cherry_pick(&repo, &feature_oid.to_string()).unwrap();
+
+        abort_in_progress_operation(&repo).unwrap();
+
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert!(!repo.index().unwrap().has_conflicts());
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id(), main_tip, "HEAD unchanged after abort");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nMAIN\nthree\n",
+            "working tree restored to pre-cherry-pick content"
+        );
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

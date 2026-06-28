@@ -84,6 +84,7 @@ async function renderGraphArea(canvas, appState) {
       uiSettings.commit_overlay_width = width;
       saveSettings({ commitOverlayWidth: width });
     },
+    conflicted: appState.conflict_resolution_in_progress,
   });
 }
 

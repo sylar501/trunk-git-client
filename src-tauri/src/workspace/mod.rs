@@ -84,6 +84,13 @@ pub struct RepoSidebarEntry {
     pub name: String,
     pub stale: bool,
     pub active: bool,
+    /// Has an unresolved merge/cherry-pick/revert conflict (PRD §4.6/§9, SPEC.md item 6) —
+    /// always `false` from `open_workspace_session` below (that constructor has no access to
+    /// `AppState.conflicted_repos`); the canonical, actually-rendered value comes from
+    /// `state.rs`'s `AppStateView::from`, the only place this struct is built that the frontend
+    /// reads on every render. No UI surfaces this yet — it's plumbed through for a later
+    /// per-row indicator/button.
+    pub conflicted: bool,
 }
 
 /// A resolved workspace ready to drive the sidebar + active-repo state (PRD §15.4.3, §15.7).
@@ -110,6 +117,7 @@ pub fn open_workspace_session(path: &str) -> Result<WorkspaceSession, String> {
             name: repo_display_name(stored),
             stale: resolve_repo_path(path, stored).is_none(),
             active: false,
+            conflicted: false,
         })
         .collect();
 
