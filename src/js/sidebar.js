@@ -154,7 +154,13 @@ async function appendBranchesSection(container, repoPath, handlers = {}) {
       openContextMenu(e.clientX, e.clientY, [
         {
           label: "Rename…",
-          onClick: () => openRenameBranchDialog({ repoPath, name: branch.name, existingNames, onMutated: handlers.onBranchChanged }),
+          onClick: () =>
+            openRenameBranchDialog({ repoPath, name: branch.name, existingNames, onMutated: handlers.onBranchChanged }).then(
+              (result) => {
+                if (!result?.renamed) return;
+                showToast({ variant: "success", message: `Branch renamed to ${result.newName}.` });
+              }
+            ),
         },
         ...(branch.is_head
           ? []
@@ -163,7 +169,11 @@ async function appendBranchesSection(container, repoPath, handlers = {}) {
               {
                 label: "Delete…",
                 danger: true,
-                onClick: () => openDeleteBranchDialog({ repoPath, name: branch.name, onMutated: handlers.onBranchChanged }),
+                onClick: () =>
+                  openDeleteBranchDialog({ repoPath, name: branch.name, onMutated: handlers.onBranchChanged }).then((result) => {
+                    if (!result?.deleted) return;
+                    showToast({ variant: "success", message: `Branch ${result.name} deleted.` });
+                  }),
               },
             ]),
       ]);

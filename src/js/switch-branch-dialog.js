@@ -6,7 +6,8 @@
 import { listBranchesForSwitch, getWorkingTreeStatus, checkoutBranch } from "./app.js";
 import { laneColorVar } from "../components/commit-row.js";
 import { openDialog } from "../components/dialog.js";
-import { runWithInlineSuccess, confirmDirtyTreeStrategy } from "./branch-dialog-shared.js";
+import { showToast } from "../components/toast.js";
+import { runDialogTask, confirmDirtyTreeStrategy } from "./branch-dialog-shared.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
 
 /**
@@ -111,8 +112,9 @@ export function openSwitchBranchDialog({ repoPath, onMutated }) {
           dlg.close();
           openCreateBranchDialog({ repoPath }).then(async (result) => {
             if (!result?.created) return;
+            showToast({ variant: "success", message: `Branch ${result.name} created.` });
             await onMutated?.();
-            resolve({ switched: true });
+            resolve({ switched: true, name: result.name });
           });
         });
         dlg.footerEl.querySelector("#sb-cancel").addEventListener("click", () => dlg.close());
@@ -145,9 +147,8 @@ export function openSwitchBranchDialog({ repoPath, onMutated }) {
       }
 
       function runSwitch(name, remoteName, remoteBranch, dirtyStrategy) {
-        runWithInlineSuccess(dlg, {
+        runDialogTask(dlg, {
           task: () => checkoutBranch(repoPath, name, { remoteName, remoteBranch, dirtyStrategy }),
-          successMessage: `Switched to ${name}.`,
           onMutated: async () => {
             await onMutated?.();
             resolve({ switched: true, name });

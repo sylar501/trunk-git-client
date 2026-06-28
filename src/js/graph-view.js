@@ -121,7 +121,7 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
     openCreateBranchDialog({ sha, shortSha, summary, repoPath })
       .then(async (result) => {
         if (!result?.created) return;
-        showToast({ variant: "success", message: "Branch created." });
+        showToast({ variant: "success", message: `Branch ${result.name} created.` });
         await onMutated?.();
       })
       .catch((err) => {
@@ -236,7 +236,7 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
         openCreateBranchDialog({ repoPath })
           .then(async (result) => {
             if (!result?.created) return;
-            showToast({ variant: "success", message: "Branch created." });
+            showToast({ variant: "success", message: `Branch ${result.name} created.` });
             await onMutated?.();
           })
           .catch((err) => showToast({ variant: "danger", message: String(err) }));

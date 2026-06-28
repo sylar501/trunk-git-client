@@ -2,10 +2,10 @@
 
 import { renameBranch } from "./app.js";
 import { openDialog } from "../components/dialog.js";
-import { runWithInlineSuccess, validateBranchName } from "./branch-dialog-shared.js";
+import { runDialogTask, validateBranchName } from "./branch-dialog-shared.js";
 
 /**
- * Resolves with `{ renamed: true }` on success; never resolves on cancel.
+ * Resolves with `{ renamed: true, oldName, newName }` on success; never resolves on cancel.
  * @param {{ repoPath: string, name: string, existingNames: string[], onMutated?: () => Promise<void>|void }} opts
  */
 export function openRenameBranchDialog({ repoPath, name, existingNames, onMutated }) {
@@ -73,12 +73,11 @@ export function openRenameBranchDialog({ repoPath, name, existingNames, onMutate
     function submit() {
       const newInput = dlg.bodyEl.querySelector("#rb-new");
       const newName = newInput.value.trim();
-      runWithInlineSuccess(dlg, {
+      runDialogTask(dlg, {
         task: () => renameBranch(repoPath, name, newName),
-        successMessage: "Branch renamed.",
         onMutated: async () => {
           await onMutated?.();
-          resolve({ renamed: true });
+          resolve({ renamed: true, oldName: name, newName });
         },
         onError: (err) => {
           render();

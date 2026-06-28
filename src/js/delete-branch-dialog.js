@@ -4,10 +4,10 @@
 
 import { getBranchDeleteInfo, deleteBranch } from "./app.js";
 import { openDialog } from "../components/dialog.js";
-import { runWithInlineSuccess } from "./branch-dialog-shared.js";
+import { runDialogTask } from "./branch-dialog-shared.js";
 
 /**
- * Resolves with `{ deleted: true }` on success; never resolves on cancel.
+ * Resolves with `{ deleted: true, name }` on success; never resolves on cancel.
  * @param {{ repoPath: string, name: string, onMutated?: () => Promise<void>|void }} opts
  */
 export function openDeleteBranchDialog({ repoPath, name, onMutated }) {
@@ -68,12 +68,11 @@ export function openDeleteBranchDialog({ repoPath, name, onMutated }) {
     }
 
     function submit(force, alsoDeleteRemote) {
-      runWithInlineSuccess(dlg, {
+      runDialogTask(dlg, {
         task: () => deleteBranch(repoPath, name, force, alsoDeleteRemote),
-        successMessage: "Branch deleted.",
         onMutated: async () => {
           await onMutated?.();
-          resolve({ deleted: true });
+          resolve({ deleted: true, name });
         },
         onError: (err) => {
           dlg.setBody(`<div class="info-box ib-red">${String(err)}</div>`);

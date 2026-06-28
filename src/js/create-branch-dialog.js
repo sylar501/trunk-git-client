@@ -10,10 +10,10 @@
 
 import { createBranchAt, listBranches, listRemotes, pushBranch } from "./app.js";
 import { openDialog } from "../components/dialog.js";
-import { runWithInlineSuccess, validateBranchName } from "./branch-dialog-shared.js";
+import { runDialogTask, validateBranchName } from "./branch-dialog-shared.js";
 
 /**
- * Resolves with `{ created: true }` on success; never resolves on cancel.
+ * Resolves with `{ created: true, name }` on success; never resolves on cancel.
  * @param {{ sha?: string, shortSha?: string, summary?: string, repoPath: string }} opts
  */
 export function openCreateBranchDialog({ sha, shortSha, summary, repoPath }) {
@@ -132,15 +132,14 @@ export function openCreateBranchDialog({ sha, shortSha, summary, repoPath }) {
 
       function submit() {
         const name = state.name.trim();
-        runWithInlineSuccess(dlg, {
+        runDialogTask(dlg, {
           task: async () => {
             await createBranchAt(repoPath, state.sha, name, state.checkout);
             if (state.push && remotes.length > 0) {
               await pushBranch(repoPath, name, remotes[0], name, true, false, false);
             }
           },
-          successMessage: "Branch created.",
-          onMutated: () => resolve({ created: true }),
+          onMutated: () => resolve({ created: true, name }),
           onError: (err) => {
             render();
             const errorEl = dlg.bodyEl.querySelector("#branch-error");

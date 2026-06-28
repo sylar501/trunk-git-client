@@ -1,12 +1,13 @@
-// Shared submit-flow helper for the four branch dialogs (PRD §13.5, SPEC.md item 8): "inline
-// success message (spinner → success → auto-close after 800ms) rather than closing immediately
-// on submit." Distinct from the Push/Fetch/Pull dialogs' persistent progress-log pattern
-// (push-pull-shared.js's `createProgressLog`) — these operations are near-instant local git
-// calls, not long-running network transfers, so a log view would be empty most of the time.
+// Shared submit-flow helper for the four branch dialogs (PRD §13.5, SPEC.md item 8). Revised
+// from §13.5's original "inline success message (spinner → success → auto-close)" wording
+// during this session: a dialog that lingers on a static success message after the operation
+// already finished reads as a stuck/frozen dialog rather than confirmation, especially for
+// near-instant local git calls like these. Success now closes the dialog immediately and lets
+// the caller show a toast (the toast.js component, same as push/pull/cherry-pick elsewhere in
+// the app) — the dialog only stays open on failure, so it can show the error inline with enough
+// context to fix and retry.
 
 import { openDialog } from "../components/dialog.js";
-
-const AUTO_CLOSE_MS = 800;
 
 /**
  * The dirty-tree "stash automatically / carry over" choice (§13.2), shared by the full Switch
@@ -64,33 +65,27 @@ export function validateBranchName(name, existingNames = []) {
 }
 
 /**
- * Runs `task()`, swapping the dialog body for a spinner while it's in flight. On success, shows
- * a centred green checkmark + `successMessage` and auto-closes after 800ms. On failure, calls
- * `onError` with the thrown value so the caller can re-render its own form (with its listeners
- * intact) and show an inline error the way it already does elsewhere (red border, error box,
- * etc.) — this helper never closes the dialog and never touches the body/footer on failure.
+ * Runs `task()`, swapping the dialog body for a spinner while it's in flight. On success, closes
+ * the dialog immediately (the caller shows a toast — see this file's header comment). On
+ * failure, calls `onError` with the thrown value so the caller can re-render its own form (with
+ * its listeners intact) and show an inline error the way it already does elsewhere (red border,
+ * error box, etc.) — failure never closes the dialog.
  *
  * @param {ReturnType<typeof import("../components/dialog.js").openDialog>} dlg
  * @param {{
  *   task: () => Promise<unknown>,
- *   successMessage: string,
  *   onError: (err: unknown) => void,
  *   onMutated?: () => Promise<void> | void,
  * }} opts
  */
-export function runWithInlineSuccess(dlg, { task, successMessage, onError, onMutated }) {
+export function runDialogTask(dlg, { task, onError, onMutated }) {
   dlg.setBody(`<div class="loading-center"><div class="spinner lg"></div></div>`);
   dlg.setFooter("");
 
   task()
     .then(async () => {
-      dlg.setBody(`
-        <div class="loading-center">
-          <div class="info-box ib-green" style="font-size:13px;">✓ ${successMessage}</div>
-        </div>
-      `);
+      dlg.close();
       await onMutated?.();
-      setTimeout(() => dlg.close(), AUTO_CLOSE_MS);
     })
     .catch(onError);
 }
