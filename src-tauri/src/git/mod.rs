@@ -139,7 +139,7 @@ impl Repo {
 
     pub fn push_branch(
         &self,
-        on_progress: impl FnMut(PushProgressPayload),
+        on_progress: impl FnMut(ProgressEvent),
         local_branch: &str,
         remote_name: &str,
         remote_branch: &str,
@@ -161,7 +161,7 @@ impl Repo {
 
     pub fn fetch_remote(
         &self,
-        on_progress: impl FnMut(FetchProgressPayload),
+        on_progress: impl FnMut(ProgressEvent),
         remote_name: Option<&str>,
         prune: bool,
         tags: bool,
@@ -172,7 +172,7 @@ impl Repo {
 
     pub fn pull_branch(
         &self,
-        on_progress: impl FnMut(FetchProgressPayload),
+        on_progress: impl FnMut(ProgressEvent),
         local_branch: &str,
         remote_name: &str,
         remote_branch: &str,
@@ -1784,19 +1784,56 @@ pub struct RemoteBranchInfo {
     pub behind: usize,
 }
 
+/// One line of terminal-style push/fetch output (PRD §12's progress areas) — `Remote` is the
+/// server's own sideband text (e.g. "Enumerating objects: 2073, done."), passed through verbatim
+/// except for the `remote: ` prefix git's own CLI adds when displaying it; `Stage` is a raw
+/// counter update for a client-computed stage ("Counting objects"/"Compressing objects" from
+/// `pack_progress`, "Writing objects" from `push_transfer_progress`, "Receiving objects"/
+/// "Resolving deltas" from `transfer_progress`). All percentage/byte-size/rate formatting — the
+/// part that makes these counters look like `git`'s own output — is deliberately left to the
+/// frontend, which already needs wall-clock timestamps (for rate) that don't belong here.
 #[derive(Debug, Clone, Serialize)]
-pub struct PushProgressPayload {
-    pub current: usize,
-    pub total: usize,
-    pub bytes: usize,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProgressEvent {
+    Remote { text: String },
+    Stage { stage: String, current: usize, total: usize, bytes: Option<usize> },
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct FetchProgressPayload {
-    pub received_objects: usize,
-    pub total_objects: usize,
-    pub indexed_objects: usize,
-    pub received_bytes: usize,
+/// Splits a sideband chunk on `\r`/`\n` (the same characters git's own progress lines use to
+/// overwrite themselves in a terminal) into the individual completed/in-flight lines it contains,
+/// prefixing each with `remote: ` to match real git's display convention for this channel.
+pub(crate) fn sideband_lines(data: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(data)
+        .split(['\r', '\n'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("remote: {s}"))
+        .collect()
+}
+
+/// Turns one `transfer_progress` tick into the "Receiving objects"/"Resolving deltas" line(s) it
+/// represents (PRD §12) — shared by `fetch_remote` below and `workspace::clone_repository`
+/// (clone's pack download is the exact same client-side transfer, just before any repo exists
+/// yet to attach a `Repo`/`Repository` method to).
+pub(crate) fn transfer_progress_events(progress: &git2::Progress<'_>) -> Vec<ProgressEvent> {
+    let mut events = vec![ProgressEvent::Stage {
+        stage: "Receiving objects".to_string(),
+        current: progress.received_objects(),
+        total: progress.total_objects(),
+        bytes: Some(progress.received_bytes()),
+    }];
+    // Real git only starts showing "Resolving deltas" once receiving has finished — it can
+    // technically interleave for thin packs, but matching that exactly would mean showing both
+    // lines updating at once, which reads as more confusing, not more faithful.
+    if progress.received_objects() == progress.total_objects() && progress.total_deltas() > 0 {
+        events.push(ProgressEvent::Stage {
+            stage: "Resolving deltas".to_string(),
+            current: progress.indexed_deltas(),
+            total: progress.total_deltas(),
+            bytes: None,
+        });
+    }
+    events
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1990,7 +2027,7 @@ fn list_commits_behind(
 /// libgit2's push machinery.
 fn push_branch(
     repo: &Repository,
-    mut on_progress: impl FnMut(PushProgressPayload),
+    on_progress: impl FnMut(ProgressEvent),
     local_branch: &str,
     remote_name: &str,
     remote_branch: &str,
@@ -2001,6 +2038,12 @@ fn push_branch(
     repo.find_branch(local_branch, BranchType::Local)
         .map_err(|e| format!("local branch not found: {e}"))?;
     let mut remote = repo.find_remote(remote_name).map_err(|e| e.to_string())?;
+    // Shared by every callback below (pack/transfer/sideband each fire independently, but never
+    // concurrently — libgit2 calls them synchronously on this same thread) — a `RefCell` lets
+    // each one borrow it for just the duration of its own invocation instead of all needing a
+    // single, simultaneously-held `&mut` that the borrow checker can't reconcile across several
+    // separate closures stored in the same `RemoteCallbacks`.
+    let on_progress = std::cell::RefCell::new(on_progress);
 
     if force_with_lease {
         let tracking_ref_name = format!("refs/remotes/{remote_name}/{remote_branch}");
@@ -2030,8 +2073,26 @@ fn push_branch(
     {
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(credentials_callback(repo));
+        callbacks.pack_progress(|stage, current, total| {
+            let stage = match stage {
+                git2::PackBuilderStage::AddingObjects => "Counting objects",
+                git2::PackBuilderStage::Deltafication => "Compressing objects",
+            };
+            on_progress.borrow_mut()(ProgressEvent::Stage { stage: stage.to_string(), current, total, bytes: None });
+        });
         callbacks.push_transfer_progress(|current, total, bytes| {
-            on_progress(PushProgressPayload { current, total, bytes });
+            on_progress.borrow_mut()(ProgressEvent::Stage {
+                stage: "Writing objects".to_string(),
+                current,
+                total,
+                bytes: Some(bytes),
+            });
+        });
+        callbacks.sideband_progress(|data| {
+            for text in sideband_lines(data) {
+                on_progress.borrow_mut()(ProgressEvent::Remote { text });
+            }
+            true
         });
         callbacks.push_update_reference(|refname, status| {
             if let Some(msg) = status {
@@ -2062,7 +2123,7 @@ fn push_branch(
 /// default). Submodule updates are best-effort and never fail the overall fetch.
 fn fetch_remote(
     repo: &Repository,
-    mut on_progress: impl FnMut(FetchProgressPayload),
+    on_progress: impl FnMut(ProgressEvent),
     remote_name: Option<&str>,
     prune: bool,
     tags: bool,
@@ -2072,17 +2133,24 @@ fn fetch_remote(
         Some(n) => vec![n.to_string()],
         None => list_remotes(repo)?,
     };
+    // See `push_branch`'s matching comment — shared across `transfer_progress`/
+    // `sideband_progress`, which fire independently but never concurrently.
+    let on_progress = std::cell::RefCell::new(on_progress);
     for name in &names {
         let mut remote = repo.find_remote(name).map_err(|e| e.to_string())?;
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(credentials_callback(repo));
         callbacks.transfer_progress(|progress: git2::Progress<'_>| {
-            on_progress(FetchProgressPayload {
-                received_objects: progress.received_objects(),
-                total_objects: progress.total_objects(),
-                indexed_objects: progress.indexed_objects(),
-                received_bytes: progress.received_bytes(),
-            });
+            let mut on_progress = on_progress.borrow_mut();
+            for ev in transfer_progress_events(&progress) {
+                on_progress(ev);
+            }
+            true
+        });
+        callbacks.sideband_progress(|data| {
+            for text in sideband_lines(data) {
+                on_progress.borrow_mut()(ProgressEvent::Remote { text });
+            }
             true
         });
         let mut fetch_opts = git2::FetchOptions::new();
@@ -2151,7 +2219,7 @@ fn drive_rebase_to_completion(repo: &Repository, mut rebase: git2::Rebase<'_>) -
 /// `finish_conflict_resolution`.
 fn pull_branch(
     repo: &Repository,
-    on_progress: impl FnMut(FetchProgressPayload),
+    on_progress: impl FnMut(ProgressEvent),
     local_branch: &str,
     remote_name: &str,
     remote_branch: &str,

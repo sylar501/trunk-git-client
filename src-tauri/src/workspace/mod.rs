@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{AppHandle, Emitter};
 
-use crate::git::Repo;
+use crate::git::{sideband_lines, transfer_progress_events, ProgressEvent, Repo};
 use crate::recent::{self, RecentKind};
 
 /// A `.trunk` workspace file (PRD §15.4.1): a TOML config grouping repository paths.
@@ -284,14 +284,6 @@ pub fn create_workspace(
 
 // --- Clone (PRD §15.5.1) ------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
-pub struct CloneProgressPayload {
-    pub received_objects: usize,
-    pub total_objects: usize,
-    pub indexed_objects: usize,
-    pub received_bytes: usize,
-}
-
 #[derive(Debug, Serialize)]
 pub struct CloneOutcome {
     pub repo_path: String,
@@ -320,6 +312,15 @@ pub enum CloneWorkspaceAction {
 /// No `RemoteCallbacks::credentials()` is wired up — there's no auth UI in this session
 /// (§15.5.1 scope). Private-repo clones fail with an inline libgit2 auth error, surfaced
 /// through the existing Step-3 error/Retry path.
+///
+/// Progress events (still on the `"clone-progress"` channel, now `git::ProgressEvent` instead
+/// of a flat received/total/bytes struct) cover the same three stages real `git clone`'s own
+/// output does: the server's sideband text ("remote: Enumerating/Counting/Compressing objects…",
+/// verbatim via `sideband_progress`), the pack transfer ("Receiving objects"/"Resolving deltas",
+/// via `transfer_progress_events` — shared with `git::fetch_remote`, since it's the exact same
+/// client-side computation), and finally the working-tree checkout clone alone performs
+/// afterward ("Updating files", via `CheckoutBuilder::progress` — fetch/push/pull never trigger
+/// this since they don't check anything out).
 pub async fn clone_repository(
     app: AppHandle,
     url: String,
@@ -331,22 +332,35 @@ pub async fn clone_repository(
 
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let mut callbacks = git2::RemoteCallbacks::new();
+        let transfer_app = progress_app.clone();
         callbacks.transfer_progress(move |progress: git2::Progress<'_>| {
-            let _ = progress_app.emit(
-                "clone-progress",
-                CloneProgressPayload {
-                    received_objects: progress.received_objects(),
-                    total_objects: progress.total_objects(),
-                    indexed_objects: progress.indexed_objects(),
-                    received_bytes: progress.received_bytes(),
-                },
-            );
+            for ev in transfer_progress_events(&progress) {
+                let _ = transfer_app.emit("clone-progress", ev);
+            }
+            true
+        });
+        let sideband_app = progress_app.clone();
+        callbacks.sideband_progress(move |data| {
+            for text in sideband_lines(data) {
+                let _ = sideband_app.emit("clone-progress", ProgressEvent::Remote { text });
+            }
             true
         });
         let mut fetch_opts = git2::FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
+
+        let checkout_app = progress_app.clone();
+        let mut checkout_builder = git2::build::CheckoutBuilder::new();
+        checkout_builder.progress(move |_path, current, total| {
+            let _ = checkout_app.emit(
+                "clone-progress",
+                ProgressEvent::Stage { stage: "Updating files".to_string(), current, total, bytes: None },
+            );
+        });
+
         let mut builder = git2::build::RepoBuilder::new();
         builder.fetch_options(fetch_opts);
+        builder.with_checkout(checkout_builder);
         builder
             .clone(&url, Path::new(&dest))
             .map(|_repo| ())

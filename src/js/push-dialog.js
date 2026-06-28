@@ -13,7 +13,7 @@ import {
 } from "./app.js";
 import { openDialog } from "../components/dialog.js";
 import { showToast } from "../components/toast.js";
-import { renderCommitList, fillCommitListText } from "./push-pull-shared.js";
+import { renderCommitList, fillCommitListText, createProgressLog, attachEnterToClose } from "./push-pull-shared.js";
 
 /** @param {{ repoPath: string, onMutated?: () => Promise<void>|void }} opts */
 export async function openPushDialog({ repoPath, onMutated }) {
@@ -155,21 +155,18 @@ export async function openPushDialog({ repoPath, onMutated }) {
   }
 
   function renderProgress({ setUpstream, force, forceWithLease }) {
-    dlg.setBody(`
-      <div class="df">
-        <div class="lbl" id="pd-status">Pushing…</div>
-        <div id="pd-log" style="font-family:monospace;font-size:10px;color:var(--text-secondary);"></div>
-      </div>
-    `);
+    dlg.setBody(`<div id="pd-log" class="pf-log"></div>`);
     dlg.setFooter(`<div class="btn btn-neutral" id="pd-close">Cancel</div>`);
     dlg.footerEl.querySelector("#pd-close").addEventListener("click", () => dlg.close());
 
-    const statusEl = dlg.bodyEl.querySelector("#pd-status");
     const logEl = dlg.bodyEl.querySelector("#pd-log");
+    const log = createProgressLog();
+    log.render(logEl);
 
     let unlisten;
     onPushProgress((payload) => {
-      logEl.textContent = `${payload.current}/${payload.total} objects (${payload.bytes} bytes)`;
+      log.onEvent(payload);
+      log.render(logEl);
     }).then((fn) => {
       unlisten = fn;
     });
@@ -177,14 +174,22 @@ export async function openPushDialog({ repoPath, onMutated }) {
     pushBranch(repoPath, state.localBranch, state.remoteName, state.remoteBranch, setUpstream, force, forceWithLease)
       .then(async () => {
         if (unlisten) unlisten();
-        statusEl.textContent = "Push complete.";
-        dlg.close();
-        showToast({ variant: "success", message: "Push complete." });
-        await onMutated?.();
+        log.appendLine("");
+        log.appendLine("Push complete.");
+        log.render(logEl);
+        const closeAndFinish = async () => {
+          dlg.close();
+          showToast({ variant: "success", message: "Push complete." });
+          await onMutated?.();
+        };
+        dlg.setFooter(`<div class="btn btn-blue" id="pd-done">Close</div>`);
+        dlg.footerEl.querySelector("#pd-done").addEventListener("click", closeAndFinish);
+        attachEnterToClose(dlg, closeAndFinish);
       })
       .catch((err) => {
         if (unlisten) unlisten();
-        dlg.setBody(`<div class="info-box ib-red">Push failed: ${String(err)}</div>`);
+        dlg.setBody(`<div id="pd-log" class="pf-log"></div><div class="info-box ib-red">Push failed: ${String(err)}</div>`);
+        log.render(dlg.bodyEl.querySelector("#pd-log"));
         dlg.setFooter(`
           <div class="btn btn-neutral" id="pd-cancel-2">Cancel</div>
           <div class="btn btn-blue" id="pd-retry">Retry</div>

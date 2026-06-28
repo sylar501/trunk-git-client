@@ -25,7 +25,8 @@ body {
 input,
 textarea,
 .toast,
-.info-box {
+.info-box,
+.pf-log {
   user-select: text;
   -webkit-user-select: text;
 }
@@ -1715,4 +1716,19 @@ select.inp option {
 .pf-radio-opt-desc {
   font-size: 10px;
   color: var(--text-secondary);
+}
+
+.pf-log {
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
 }

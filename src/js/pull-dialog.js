@@ -5,7 +5,16 @@
 import { listBranches, listBranchesWithTracking, listRemotes, getRemoteUrl, listCommitsBehind, pullBranch, onFetchProgress } from "./app.js";
 import { openDialog } from "../components/dialog.js";
 import { showToast } from "../components/toast.js";
-import { renderCommitList, fillCommitListText } from "./push-pull-shared.js";
+import { renderCommitList, fillCommitListText, createProgressLog, attachEnterToClose } from "./push-pull-shared.js";
+
+// The merge/rebase/ff-only integration step itself has no native streamed text (unlike the fetch
+// phase above it) — one closing line per strategy stands in for it, same spirit as real git's own
+// one-line "Fast-forward."/"Successfully rebased." summaries.
+const FINISH_TEXT = {
+  rebase: "Successfully rebased.",
+  merge: "Merge complete.",
+  ff_only: "Fast-forward complete.",
+};
 
 const STRATEGY_COPY = {
   rebase: { label: "Rebase", desc: "Replays your local commits on top of the remote's — keeps history linear.", verb: "pull and rebase" },
@@ -145,21 +154,18 @@ export async function openPullDialog({ repoPath, onMutated }) {
   }
 
   function renderProgress() {
-    dlg.setBody(`
-      <div class="df">
-        <div class="lbl" id="pld-status">${STRATEGY_COPY[state.strategy].label}ing…</div>
-        <div id="pld-log" style="font-family:monospace;font-size:10px;color:var(--text-secondary);"></div>
-      </div>
-    `);
+    dlg.setBody(`<div id="pld-log" class="pf-log"></div>`);
     dlg.setFooter(`<div class="btn btn-neutral" id="pld-close">Cancel</div>`);
     dlg.footerEl.querySelector("#pld-close").addEventListener("click", () => dlg.close());
 
-    const statusEl = dlg.bodyEl.querySelector("#pld-status");
     const logEl = dlg.bodyEl.querySelector("#pld-log");
+    const log = createProgressLog();
+    log.render(logEl);
 
     let unlisten;
     onFetchProgress((payload) => {
-      logEl.textContent = `received ${payload.received_objects}/${payload.total_objects} objects (${payload.received_bytes} bytes)`;
+      log.onEvent(payload);
+      log.render(logEl);
     }).then((fn) => {
       unlisten = fn;
     });
@@ -172,14 +178,22 @@ export async function openPullDialog({ repoPath, onMutated }) {
           window.location.href = "resolve.html";
           return;
         }
-        statusEl.textContent = "Pull complete.";
-        dlg.close();
-        showToast({ variant: "success", message: "Pull complete." });
-        await onMutated?.();
+        log.appendLine("");
+        log.appendLine(FINISH_TEXT[state.strategy]);
+        log.render(logEl);
+        const closeAndFinish = async () => {
+          dlg.close();
+          showToast({ variant: "success", message: "Pull complete." });
+          await onMutated?.();
+        };
+        dlg.setFooter(`<div class="btn btn-amber" id="pld-done">Close</div>`);
+        dlg.footerEl.querySelector("#pld-done").addEventListener("click", closeAndFinish);
+        attachEnterToClose(dlg, closeAndFinish);
       })
       .catch((err) => {
         if (unlisten) unlisten();
-        dlg.setBody(`<div class="info-box ib-red">Pull failed: ${String(err)}</div>`);
+        dlg.setBody(`<div id="pld-log" class="pf-log"></div><div class="info-box ib-red">Pull failed: ${String(err)}</div>`);
+        log.render(dlg.bodyEl.querySelector("#pld-log"));
         dlg.setFooter(`
           <div class="btn btn-neutral" id="pld-cancel-2">Cancel</div>
           <div class="btn btn-amber" id="pld-retry">Retry</div>

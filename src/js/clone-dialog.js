@@ -4,6 +4,7 @@
 
 import { cloneRepository, onCloneProgress, pickFolder, defaultDirectory } from "./app.js";
 import { openDialog } from "../components/dialog.js";
+import { createProgressLog, attachEnterToClose } from "./push-pull-shared.js";
 
 function suggestNameFromUrl(url) {
   const trimmed = url.trim().replace(/\/+$/, "");
@@ -124,22 +125,20 @@ export function openCloneDialog({ workspaceContext } = {}) {
     }
 
     function renderStep3() {
-      dlg.setBody(`
-        <div class="df">
-          <div class="lbl" id="clone-status">Cloning…</div>
-          <div id="clone-log" style="font-family:monospace;font-size:10px;color:var(--text-secondary);max-height:140px;overflow-y:auto;"></div>
-        </div>
-      `);
+      dlg.setBody(`<div id="clone-log" class="pf-log"></div>`);
       dlg.setFooter(`<div class="btn btn-neutral" id="clone-close">Cancel</div>`);
       dlg.footerEl.querySelector("#clone-close").addEventListener("click", () => dlg.close());
 
-      const statusEl = dlg.bodyEl.querySelector("#clone-status");
       const logEl = dlg.bodyEl.querySelector("#clone-log");
+      const log = createProgressLog();
+      const folderName = state.destination.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || state.destination;
+      log.appendLine(`Cloning into '${folderName}'...`);
+      log.render(logEl);
 
       let unlisten;
       onCloneProgress((payload) => {
-        const line = `received ${payload.received_objects}/${payload.total_objects} objects (${payload.received_bytes} bytes)`;
-        logEl.textContent = line;
+        log.onEvent(payload);
+        log.render(logEl);
       }).then((fn) => {
         unlisten = fn;
       });
@@ -152,15 +151,21 @@ export function openCloneDialog({ workspaceContext } = {}) {
       cloneRepository(state.url, state.destination, workspaceAction)
         .then((outcome) => {
           if (unlisten) unlisten();
-          statusEl.textContent = "Clone complete.";
-          dlg.close();
-          resolve({ repoPath: outcome.repo_path, workspacePath: outcome.workspace_path });
+          log.appendLine("");
+          log.appendLine("Clone complete.");
+          log.render(logEl);
+          dlg.setFooter(`<div class="btn btn-green" id="clone-done">Close</div>`);
+          const finish = () => {
+            dlg.close();
+            resolve({ repoPath: outcome.repo_path, workspacePath: outcome.workspace_path });
+          };
+          dlg.footerEl.querySelector("#clone-done").addEventListener("click", finish);
+          attachEnterToClose(dlg, finish);
         })
         .catch((err) => {
           if (unlisten) unlisten();
-          dlg.setBody(`
-            <div class="info-box ib-red">Clone failed: ${String(err)}</div>
-          `);
+          dlg.setBody(`<div id="clone-log" class="pf-log"></div><div class="info-box ib-red">Clone failed: ${String(err)}</div>`);
+          log.render(dlg.bodyEl.querySelector("#clone-log"));
           dlg.setFooter(`
             <div class="btn btn-neutral" id="clone-cancel-2">Cancel</div>
             <div class="btn btn-blue" id="clone-retry">Retry</div>

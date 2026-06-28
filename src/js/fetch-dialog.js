@@ -4,6 +4,7 @@
 import { listRemotes, getRemoteUrl, fetchRemote, onFetchProgress } from "./app.js";
 import { openDialog } from "../components/dialog.js";
 import { showToast } from "../components/toast.js";
+import { createProgressLog, attachEnterToClose } from "./push-pull-shared.js";
 
 /** @param {{ repoPath: string, onMutated?: () => Promise<void>|void }} opts */
 export async function openFetchDialog({ repoPath, onMutated }) {
@@ -12,6 +13,10 @@ export async function openFetchDialog({ repoPath, onMutated }) {
     remotes = await listRemotes(repoPath);
   } catch (err) {
     showToast({ variant: "danger", message: String(err) });
+    return;
+  }
+  if (remotes.length === 0) {
+    showToast({ variant: "danger", message: "This repository has no remotes configured." });
     return;
   }
 
@@ -71,21 +76,18 @@ export async function openFetchDialog({ repoPath, onMutated }) {
   }
 
   function renderProgress(remoteName, prune, tags, submodules) {
-    dlg.setBody(`
-      <div class="df">
-        <div class="lbl" id="fd-status">Fetching…</div>
-        <div id="fd-log" style="font-family:monospace;font-size:10px;color:var(--text-secondary);"></div>
-      </div>
-    `);
+    dlg.setBody(`<div id="fd-log" class="pf-log"></div>`);
     dlg.setFooter(`<div class="btn btn-neutral" id="fd-close">Cancel</div>`);
     dlg.footerEl.querySelector("#fd-close").addEventListener("click", () => dlg.close());
 
-    const statusEl = dlg.bodyEl.querySelector("#fd-status");
     const logEl = dlg.bodyEl.querySelector("#fd-log");
+    const log = createProgressLog();
+    log.render(logEl);
 
     let unlisten;
     onFetchProgress((payload) => {
-      logEl.textContent = `received ${payload.received_objects}/${payload.total_objects} objects (${payload.received_bytes} bytes)`;
+      log.onEvent(payload);
+      log.render(logEl);
     }).then((fn) => {
       unlisten = fn;
     });
@@ -93,18 +95,22 @@ export async function openFetchDialog({ repoPath, onMutated }) {
     fetchRemote(repoPath, remoteName, prune, tags, submodules)
       .then(async (outcome) => {
         if (unlisten) unlisten();
-        statusEl.textContent = "Fetch complete.";
-        dlg.close();
-        if (outcome.submodule_warnings?.length) {
-          showToast({ variant: "warning", message: outcome.submodule_warnings.join("; ") });
-        } else {
-          showToast({ variant: "success", message: "Fetch complete." });
-        }
-        await onMutated?.();
+        log.appendLine("");
+        log.appendLine(outcome.submodule_warnings?.length ? `Fetch complete (${outcome.submodule_warnings.join("; ")}).` : "Fetch complete.");
+        log.render(logEl);
+        const closeAndFinish = async () => {
+          dlg.close();
+          showToast({ variant: outcome.submodule_warnings?.length ? "warning" : "success", message: "Fetch complete." });
+          await onMutated?.();
+        };
+        dlg.setFooter(`<div class="btn btn-neutral" id="fd-done">Close</div>`);
+        dlg.footerEl.querySelector("#fd-done").addEventListener("click", closeAndFinish);
+        attachEnterToClose(dlg, closeAndFinish);
       })
       .catch((err) => {
         if (unlisten) unlisten();
-        dlg.setBody(`<div class="info-box ib-red">Fetch failed: ${String(err)}</div>`);
+        dlg.setBody(`<div id="fd-log" class="pf-log"></div><div class="info-box ib-red">Fetch failed: ${String(err)}</div>`);
+        log.render(dlg.bodyEl.querySelector("#fd-log"));
         dlg.setFooter(`
           <div class="btn btn-neutral" id="fd-cancel-2">Cancel</div>
           <div class="btn btn-neutral" id="fd-retry">Retry</div>
