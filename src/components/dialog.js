@@ -2,7 +2,7 @@
 // One reusable builder — concrete dialogs (clone wizard, nested-repo choice,
 // create-workspace prompt) supply content and call setBody/setFooter to step through flows.
 
-const ICON_VARIANTS = { blue: "ic-b", green: "ic-g", red: "ic-r", amber: "ic-a", purple: "ic-p" };
+const ICON_VARIANTS = { blue: "ic-b", green: "ic-g", red: "ic-r", amber: "ic-a", purple: "ic-p", neutral: "ic-n" };
 
 export function openDialog({ icon = "", iconVariant = "blue", title, subtitle = "", bodyHtml = "", footerHtml = "", size = "standard" }) {
   const overlay = document.createElement("div");

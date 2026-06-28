@@ -158,3 +158,61 @@ export async function getLastCommitMessage(repoPath) {
 export async function commitChanges(repoPath, message, amend, sshSign) {
   return invoke("commit_changes", { repoPath, message, amend, sshSign });
 }
+
+// --- Push / Fetch / Pull (PRD §12, SPEC.md item 7) ----------------------------------------
+
+export async function listRemotes(repoPath) {
+  return invoke("list_remotes", { repoPath });
+}
+
+export async function getRemoteUrl(repoPath, remoteName) {
+  return invoke("get_remote_url", { repoPath, remoteName });
+}
+
+export async function listBranchesWithTracking(repoPath) {
+  return invoke("list_branches_with_tracking", { repoPath });
+}
+
+export async function listCommitsAhead(repoPath, localBranch, remoteName, remoteBranch) {
+  return invoke("list_commits_ahead", { repoPath, localBranch, remoteName, remoteBranch });
+}
+
+export async function listCommitsBehind(repoPath, localBranch, remoteName, remoteBranch) {
+  return invoke("list_commits_behind", { repoPath, localBranch, remoteName, remoteBranch });
+}
+
+export async function pushBranch(
+  repoPath,
+  localBranch,
+  remoteName,
+  remoteBranch,
+  setUpstream,
+  force,
+  forceWithLease
+) {
+  return invoke("push_branch", {
+    repoPath,
+    localBranch,
+    remoteName,
+    remoteBranch,
+    setUpstream,
+    force,
+    forceWithLease,
+  });
+}
+
+export async function onPushProgress(handler) {
+  return window.__TAURI__.event.listen("push-progress", (event) => handler(event.payload));
+}
+
+export async function fetchRemote(repoPath, remoteName, prune, tags, submodules) {
+  return invoke("fetch_remote", { repoPath, remoteName, prune, tags, submodules });
+}
+
+export async function onFetchProgress(handler) {
+  return window.__TAURI__.event.listen("fetch-progress", (event) => handler(event.payload));
+}
+
+export async function pullBranch(repoPath, localBranch, remoteName, remoteBranch, strategy) {
+  return invoke("pull_branch", { repoPath, localBranch, remoteName, remoteBranch, strategy });
+}

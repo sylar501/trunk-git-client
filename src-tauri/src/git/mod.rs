@@ -65,7 +65,7 @@ impl Repo {
         conflict_file(&self.inner, file_path)
     }
 
-    pub fn finish_conflict_resolution(&self, files: Vec<ResolvedFile>) -> Result<String, String> {
+    pub fn finish_conflict_resolution(&self, files: Vec<ResolvedFile>) -> Result<ConflictableOutcome, String> {
         finish_conflict_resolution(&self.inner, files)
     }
 
@@ -115,6 +115,70 @@ impl Repo {
 
     pub fn commit_changes(&self, message: &str, amend: bool, ssh_sign: bool) -> Result<String, String> {
         commit_changes(&self.inner, message, amend, ssh_sign)
+    }
+
+    pub fn list_remotes(&self) -> Result<Vec<String>, String> {
+        list_remotes(&self.inner)
+    }
+
+    pub fn remote_url(&self, name: &str) -> Result<String, String> {
+        remote_url(&self.inner, name)
+    }
+
+    pub fn list_local_branches_with_tracking(&self) -> Result<Vec<RemoteBranchInfo>, String> {
+        list_local_branches_with_tracking(&self.inner)
+    }
+
+    pub fn list_commits_ahead(&self, local_branch: &str, remote_name: &str, remote_branch: &str) -> Result<Vec<CommitSummary>, String> {
+        list_commits_ahead(&self.inner, local_branch, remote_name, remote_branch)
+    }
+
+    pub fn list_commits_behind(&self, local_branch: &str, remote_name: &str, remote_branch: &str) -> Result<Vec<CommitSummary>, String> {
+        list_commits_behind(&self.inner, local_branch, remote_name, remote_branch)
+    }
+
+    pub fn push_branch(
+        &self,
+        on_progress: impl FnMut(PushProgressPayload),
+        local_branch: &str,
+        remote_name: &str,
+        remote_branch: &str,
+        set_upstream: bool,
+        force: bool,
+        force_with_lease: bool,
+    ) -> Result<(), String> {
+        push_branch(
+            &self.inner,
+            on_progress,
+            local_branch,
+            remote_name,
+            remote_branch,
+            set_upstream,
+            force,
+            force_with_lease,
+        )
+    }
+
+    pub fn fetch_remote(
+        &self,
+        on_progress: impl FnMut(FetchProgressPayload),
+        remote_name: Option<&str>,
+        prune: bool,
+        tags: bool,
+        submodules: bool,
+    ) -> Result<FetchOutcome, String> {
+        fetch_remote(&self.inner, on_progress, remote_name, prune, tags, submodules)
+    }
+
+    pub fn pull_branch(
+        &self,
+        on_progress: impl FnMut(FetchProgressPayload),
+        local_branch: &str,
+        remote_name: &str,
+        remote_branch: &str,
+        strategy: PullStrategy,
+    ) -> Result<ConflictableOutcome, String> {
+        pull_branch(&self.inner, on_progress, local_branch, remote_name, remote_branch, strategy)
     }
 }
 
@@ -982,7 +1046,7 @@ fn conflict_file(repo: &Repository, file_path: &str) -> Result<Vec<ConflictSegme
 /// (`CHERRY_PICK_HEAD`/`MERGE_HEAD`) or prepared message file, the same sources plain `git
 /// cherry-pick --continue`/`git merge --continue` read from — so this works whether or not the
 /// app was restarted mid-resolution.
-fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Result<String, String> {
+fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Result<ConflictableOutcome, String> {
     let workdir = repo
         .workdir()
         .ok_or_else(|| "Bare repositories have no working tree.".to_string())?
@@ -995,6 +1059,19 @@ fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Re
     index.write().map_err(|e| e.to_string())?;
     if index.has_conflicts() {
         return Err("Some files still have unresolved conflicts.".to_string());
+    }
+
+    // Rebase has no single fixed parent set (each step is its own commit, and a later step may
+    // still conflict) — handed off to `drive_rebase_to_completion` instead of the fixed-parents
+    // commit logic below, which only fits cherry-pick/revert/merge's "exactly one commit" shape.
+    if matches!(
+        repo.state(),
+        git2::RepositoryState::Rebase | git2::RepositoryState::RebaseInteractive | git2::RepositoryState::RebaseMerge
+    ) {
+        let mut rebase = repo.open_rebase(None).map_err(|e| e.to_string())?;
+        let committer = repo.signature().map_err(|e| e.to_string())?;
+        rebase.commit(None, &committer, None).map_err(|e| e.to_string())?;
+        return drive_rebase_to_completion(repo, rebase);
     }
 
     let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
@@ -1051,7 +1128,7 @@ fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Re
         .commit(Some("HEAD"), &author, &committer, &message, &tree, &parent_refs)
         .map_err(|e| e.to_string())?;
     repo.cleanup_state().map_err(|e| e.to_string())?;
-    Ok(new_oid.to_string())
+    Ok(ConflictableOutcome::Completed { sha: new_oid.to_string() })
 }
 
 /// Creates a branch at `sha` and checks it out — deliberately a minimal placeholder (no
@@ -1696,6 +1773,489 @@ fn commit_changes(repo: &Repository, message: &str, amend: bool, ssh_sign: bool)
     Ok(new_oid.to_string())
 }
 
+// --- Remote operations: push/fetch/pull (SPEC.md item 7, PRD §12) -------------------------
+
+/// One local branch's upstream-tracking summary for the Push/Pull dialogs' from/to dropdowns.
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteBranchInfo {
+    pub name: String,
+    pub upstream: Option<String>,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PushProgressPayload {
+    pub current: usize,
+    pub total: usize,
+    pub bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FetchProgressPayload {
+    pub received_objects: usize,
+    pub total_objects: usize,
+    pub indexed_objects: usize,
+    pub received_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FetchOutcome {
+    /// Best-effort submodule-update failures (PRD §12.2's "fetch submodules" checkbox) — these
+    /// don't fail the overall fetch, they're surfaced as warnings the caller can toast.
+    pub submodule_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullStrategy {
+    Rebase,
+    Merge,
+    FfOnly,
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// Builds a `RemoteCallbacks::credentials` closure (PRD §12 "remote auth"): tries ssh-agent then
+/// the user's default SSH keys for `SSH_KEY` requests, falls back to the system git's configured
+/// `credential.helper` for username/password requests — i.e. whatever OS-native store
+/// (osxkeychain/wincred/libsecret) the user's own git is already wired to, rather than a new
+/// credential store of Trunk's own (CLAUDE.md's "OS-native credential storage" goal, and the
+/// PRD's own note that Secret Service availability varies on Linux assumes exactly this path).
+/// Capped at 3 attempts so a bad/missing credential fails cleanly instead of looping forever —
+/// libgit2 re-invokes this callback on each rejected attempt.
+fn credentials_callback(
+    repo: &Repository,
+) -> impl FnMut(&str, Option<&str>, git2::CredentialType) -> Result<git2::Cred, git2::Error> {
+    let config = repo.config();
+    let mut attempts = 0;
+    move |url, username_from_url, allowed_types| {
+        attempts += 1;
+        if attempts > 3 {
+            return Err(git2::Error::from_str("authentication failed after multiple attempts"));
+        }
+        let username = username_from_url.unwrap_or("git");
+        if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+            if let Ok(cred) = git2::Cred::ssh_key_from_agent(username) {
+                return Ok(cred);
+            }
+            if let Some(home) = home_dir() {
+                for key_name in ["id_ed25519", "id_rsa"] {
+                    let private = home.join(".ssh").join(key_name);
+                    if private.exists() {
+                        if let Ok(cred) = git2::Cred::ssh_key(username, None, &private, None) {
+                            return Ok(cred);
+                        }
+                    }
+                }
+            }
+        }
+        if allowed_types.contains(git2::CredentialType::USERNAME) {
+            return git2::Cred::username(username);
+        }
+        if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            if let Ok(cfg) = &config {
+                if let Ok(cred) = git2::Cred::credential_helper(cfg, url, username_from_url) {
+                    return Ok(cred);
+                }
+            }
+        }
+        Err(git2::Error::from_str("no usable credentials for this remote"))
+    }
+}
+
+fn list_remotes(repo: &Repository) -> Result<Vec<String>, String> {
+    Ok(repo
+        .remotes()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(|s| s.map(String::from))
+        .collect())
+}
+
+fn remote_url(repo: &Repository, name: &str) -> Result<String, String> {
+    repo.find_remote(name)
+        .map_err(|e| e.to_string())?
+        .url()
+        .map(String::from)
+        .ok_or_else(|| "Remote has no URL.".to_string())
+}
+
+fn list_local_branches_with_tracking(repo: &Repository) -> Result<Vec<RemoteBranchInfo>, String> {
+    let mut out = Vec::new();
+    for branch in repo.branches(Some(BranchType::Local)).map_err(|e| e.to_string())? {
+        let (branch, _) = branch.map_err(|e| e.to_string())?;
+        let name = match branch.name().map_err(|e| e.to_string())? {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let local_oid = branch.get().target();
+        let upstream = branch.upstream().ok();
+        let (upstream_name, ahead, behind) = match (&upstream, local_oid) {
+            (Some(up), Some(local_oid)) => {
+                let upstream_name = up.name().ok().flatten().map(String::from);
+                let (ahead, behind) = match up.get().target() {
+                    Some(up_oid) => repo.graph_ahead_behind(local_oid, up_oid).unwrap_or((0, 0)),
+                    None => (0, 0),
+                };
+                (upstream_name, ahead, behind)
+            }
+            _ => (None, 0, 0),
+        };
+        out.push(RemoteBranchInfo { name, upstream: upstream_name, ahead, behind });
+    }
+    Ok(out)
+}
+
+/// Lightweight per-commit summary for the Push/Pull dialogs' ahead/incoming commit lists (PRD
+/// §12.1/§12.3) — deliberately not `CommitDetail` (which also computes a full file/diff list,
+/// far more than a one-line "SHA, message, author, time" row needs).
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitSummary {
+    pub sha: String,
+    pub short_sha: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub summary: String,
+    pub time: i64,
+}
+
+fn commit_summaries_between(repo: &Repository, from_oid: Oid, hide_oid: Option<Oid>) -> Result<Vec<CommitSummary>, String> {
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.push(from_oid).map_err(|e| e.to_string())?;
+    if let Some(hide_oid) = hide_oid {
+        walk.hide(hide_oid).map_err(|e| e.to_string())?;
+    }
+    let mut out = Vec::new();
+    for oid in walk {
+        let oid = oid.map_err(|e| e.to_string())?;
+        let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+        let author = commit.author();
+        let sha = oid.to_string();
+        out.push(CommitSummary {
+            short_sha: sha[..7].to_string(),
+            sha,
+            author_name: author.name().unwrap_or_default().to_string(),
+            author_email: author.email().unwrap_or_default().to_string(),
+            summary: commit.summary().unwrap_or_default().to_string(),
+            time: commit.time().seconds(),
+        });
+    }
+    Ok(out)
+}
+
+/// Local commits not yet on `remote_name`/`remote_branch` (Push dialog's commit-summary list).
+fn list_commits_ahead(
+    repo: &Repository,
+    local_branch: &str,
+    remote_name: &str,
+    remote_branch: &str,
+) -> Result<Vec<CommitSummary>, String> {
+    let local_oid = repo
+        .find_branch(local_branch, BranchType::Local)
+        .map_err(|e| e.to_string())?
+        .get()
+        .target()
+        .ok_or_else(|| "Local branch has no commits yet.".to_string())?;
+    let remote_oid = repo.refname_to_id(&format!("refs/remotes/{remote_name}/{remote_branch}")).ok();
+    commit_summaries_between(repo, local_oid, remote_oid)
+}
+
+/// Remote commits not yet merged into `local_branch` (Pull dialog's "incoming" commit list).
+fn list_commits_behind(
+    repo: &Repository,
+    local_branch: &str,
+    remote_name: &str,
+    remote_branch: &str,
+) -> Result<Vec<CommitSummary>, String> {
+    let local_oid = repo
+        .find_branch(local_branch, BranchType::Local)
+        .map_err(|e| e.to_string())?
+        .get()
+        .target();
+    let remote_oid = repo
+        .refname_to_id(&format!("refs/remotes/{remote_name}/{remote_branch}"))
+        .map_err(|e| e.to_string())?;
+    commit_summaries_between(repo, remote_oid, local_oid)
+}
+
+/// Pushes `local_branch` to `remote_name`/`remote_branch` (PRD §12.1). `force_with_lease` is
+/// emulated client-side since libgit2 has no native equivalent: re-fetch the remote-tracking ref
+/// immediately before pushing and refuse if it moved since our last-known value — the same
+/// protection real `--force-with-lease` gives, just implemented a layer up instead of inside
+/// libgit2's push machinery.
+fn push_branch(
+    repo: &Repository,
+    mut on_progress: impl FnMut(PushProgressPayload),
+    local_branch: &str,
+    remote_name: &str,
+    remote_branch: &str,
+    set_upstream: bool,
+    force: bool,
+    force_with_lease: bool,
+) -> Result<(), String> {
+    repo.find_branch(local_branch, BranchType::Local)
+        .map_err(|e| format!("local branch not found: {e}"))?;
+    let mut remote = repo.find_remote(remote_name).map_err(|e| e.to_string())?;
+
+    if force_with_lease {
+        let tracking_ref_name = format!("refs/remotes/{remote_name}/{remote_branch}");
+        let known_oid = repo.refname_to_id(&tracking_ref_name).ok();
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(credentials_callback(repo));
+        let mut fetch_opts = git2::FetchOptions::new();
+        fetch_opts.remote_callbacks(callbacks);
+        remote
+            .fetch(&[remote_branch], Some(&mut fetch_opts), None)
+            .map_err(|e| e.to_string())?;
+        let current_oid = repo.refname_to_id(&tracking_ref_name).ok();
+        if known_oid.is_some() && known_oid != current_oid {
+            return Err(format!(
+                "{remote_name}/{remote_branch} has new commits since your last fetch — fetch first to avoid overwriting them."
+            ));
+        }
+    }
+
+    let refspec = if force || force_with_lease {
+        format!("+refs/heads/{local_branch}:refs/heads/{remote_branch}")
+    } else {
+        format!("refs/heads/{local_branch}:refs/heads/{remote_branch}")
+    };
+
+    let mut rejected: Vec<String> = Vec::new();
+    {
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(credentials_callback(repo));
+        callbacks.push_transfer_progress(|current, total, bytes| {
+            on_progress(PushProgressPayload { current, total, bytes });
+        });
+        callbacks.push_update_reference(|refname, status| {
+            if let Some(msg) = status {
+                rejected.push(format!("{refname}: {msg}"));
+            }
+            Ok(())
+        });
+        let mut push_opts = git2::PushOptions::new();
+        push_opts.remote_callbacks(callbacks);
+        remote.push(&[refspec], Some(&mut push_opts)).map_err(|e| e.to_string())?;
+    }
+    if !rejected.is_empty() {
+        return Err(format!("Push rejected: {}", rejected.join(", ")));
+    }
+
+    if set_upstream {
+        let mut local = repo
+            .find_branch(local_branch, BranchType::Local)
+            .map_err(|e| e.to_string())?;
+        local
+            .set_upstream(Some(&format!("{remote_name}/{remote_branch}")))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Fetches one remote (or every remote when `remote_name` is `None`, PRD §12.2's "All remotes"
+/// default). Submodule updates are best-effort and never fail the overall fetch.
+fn fetch_remote(
+    repo: &Repository,
+    mut on_progress: impl FnMut(FetchProgressPayload),
+    remote_name: Option<&str>,
+    prune: bool,
+    tags: bool,
+    submodules: bool,
+) -> Result<FetchOutcome, String> {
+    let names: Vec<String> = match remote_name {
+        Some(n) => vec![n.to_string()],
+        None => list_remotes(repo)?,
+    };
+    for name in &names {
+        let mut remote = repo.find_remote(name).map_err(|e| e.to_string())?;
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(credentials_callback(repo));
+        callbacks.transfer_progress(|progress: git2::Progress<'_>| {
+            on_progress(FetchProgressPayload {
+                received_objects: progress.received_objects(),
+                total_objects: progress.total_objects(),
+                indexed_objects: progress.indexed_objects(),
+                received_bytes: progress.received_bytes(),
+            });
+            true
+        });
+        let mut fetch_opts = git2::FetchOptions::new();
+        fetch_opts.remote_callbacks(callbacks);
+        fetch_opts.prune(if prune { git2::FetchPrune::On } else { git2::FetchPrune::Unspecified });
+        fetch_opts.download_tags(if tags { git2::AutotagOption::All } else { git2::AutotagOption::Auto });
+        remote
+            .fetch(&Vec::<String>::new(), Some(&mut fetch_opts), None)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut submodule_warnings = Vec::new();
+    if submodules {
+        if let Ok(subs) = repo.submodules() {
+            for mut sub in subs {
+                if let Err(e) = sub.update(true, None) {
+                    submodule_warnings.push(format!("{}: {e}", sub.name().unwrap_or("submodule")));
+                }
+            }
+        }
+    }
+    Ok(FetchOutcome { submodule_warnings })
+}
+
+/// Drives a started (or reopened) rebase to completion: applies + auto-commits every
+/// non-conflicting step, stopping (returning `Conflict`, leaving `repo.state()` as `Rebase`) the
+/// moment a step's index has conflicts. The conflict resolver's existing operation-agnostic
+/// `conflict_status`/`conflict_file` already handle that state; resuming after resolution is
+/// `finish_conflict_resolution`'s job (see its `Rebase` arm below), which re-enters this same
+/// loop after committing the just-resolved step.
+fn drive_rebase_to_completion(repo: &Repository, mut rebase: git2::Rebase<'_>) -> Result<ConflictableOutcome, String> {
+    let committer = repo.signature().map_err(|e| e.to_string())?;
+    loop {
+        match rebase.next() {
+            None => break,
+            // A step whose change-set is already present in the new base (e.g. the upstream
+            // side independently picked up an equivalent change) — libgit2 has already skipped
+            // it internally; there's nothing to commit, just move on to the next step.
+            Some(Err(e)) if e.code() == git2::ErrorCode::Applied => continue,
+            Some(Err(e)) => return Err(e.to_string()),
+            Some(Ok(_)) => {
+                let index = repo.index().map_err(|e| e.to_string())?;
+                if index.has_conflicts() {
+                    return Ok(ConflictableOutcome::Conflict);
+                }
+                rebase.commit(None, &committer, None).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    rebase.finish(None).map_err(|e| e.to_string())?;
+    let head_sha = repo
+        .head()
+        .map_err(|e| e.to_string())?
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?
+        .id()
+        .to_string();
+    Ok(ConflictableOutcome::Completed { sha: head_sha })
+}
+
+/// Pulls `remote_name`/`remote_branch` into `local_branch` (PRD §12.3): always fetches first,
+/// then integrates per `strategy`. `Merge` conflicts reuse `finish_conflict_resolution`'s
+/// existing `RepositoryState::Merge` handling unchanged (it already reads `MERGE_HEAD`);
+/// `Rebase` conflicts are the one genuinely new control-flow path, handled by
+/// `drive_rebase_to_completion` above plus this function's `Rebase` arm of
+/// `finish_conflict_resolution`.
+fn pull_branch(
+    repo: &Repository,
+    on_progress: impl FnMut(FetchProgressPayload),
+    local_branch: &str,
+    remote_name: &str,
+    remote_branch: &str,
+    strategy: PullStrategy,
+) -> Result<ConflictableOutcome, String> {
+    if !is_working_tree_clean(repo).map_err(|e| e.to_string())? {
+        return Err("Commit or stash your changes before pulling.".to_string());
+    }
+    fetch_remote(repo, on_progress, Some(remote_name), false, false, false)?;
+
+    let tracking_ref_name = format!("refs/remotes/{remote_name}/{remote_branch}");
+    let upstream_oid = repo.refname_to_id(&tracking_ref_name).map_err(|e| e.to_string())?;
+    let upstream_ac = repo.find_annotated_commit(upstream_oid).map_err(|e| e.to_string())?;
+    let local_branch_ref = repo
+        .find_branch(local_branch, BranchType::Local)
+        .map_err(|e| e.to_string())?;
+    let local_oid = local_branch_ref
+        .get()
+        .target()
+        .ok_or_else(|| "Local branch has no commits yet.".to_string())?;
+    let local_ac = repo.find_annotated_commit(local_oid).map_err(|e| e.to_string())?;
+
+    let (analysis, _) = repo
+        .merge_analysis_for_ref(local_branch_ref.get(), &[&upstream_ac])
+        .map_err(|e| e.to_string())?;
+
+    if analysis.is_up_to_date() {
+        return Ok(ConflictableOutcome::Completed { sha: local_oid.to_string() });
+    }
+
+    match strategy {
+        PullStrategy::FfOnly => {
+            if !analysis.is_fast_forward() {
+                return Err("Can't fast-forward — local and remote have diverged.".to_string());
+            }
+            let refname = local_branch_ref
+                .get()
+                .name()
+                .ok_or_else(|| "Local branch ref has no name.".to_string())?
+                .to_string();
+            repo.reference(&refname, upstream_oid, true, "pull: fast-forward")
+                .map_err(|e| e.to_string())?;
+            repo.set_head(&refname).map_err(|e| e.to_string())?;
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .map_err(|e| e.to_string())?;
+            Ok(ConflictableOutcome::Completed { sha: upstream_oid.to_string() })
+        }
+        PullStrategy::Merge => {
+            if analysis.is_fast_forward() {
+                let refname = local_branch_ref
+                    .get()
+                    .name()
+                    .ok_or_else(|| "Local branch ref has no name.".to_string())?
+                    .to_string();
+                repo.reference(&refname, upstream_oid, true, "pull: fast-forward")
+                    .map_err(|e| e.to_string())?;
+                repo.set_head(&refname).map_err(|e| e.to_string())?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                    .map_err(|e| e.to_string())?;
+                return Ok(ConflictableOutcome::Completed { sha: upstream_oid.to_string() });
+            }
+            let mut checkout_builder = git2::build::CheckoutBuilder::new();
+            checkout_builder.conflict_style_diff3(true);
+            let mut merge_opts = git2::MergeOptions::new();
+            repo.merge(&[&upstream_ac], Some(&mut merge_opts), Some(&mut checkout_builder))
+                .map_err(|e| e.to_string())?;
+            let mut index = repo.index().map_err(|e| e.to_string())?;
+            if index.has_conflicts() {
+                return Ok(ConflictableOutcome::Conflict);
+            }
+            let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
+            let tree = repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
+            let local_commit = repo.find_commit(local_oid).map_err(|e| e.to_string())?;
+            let upstream_commit = repo.find_commit(upstream_oid).map_err(|e| e.to_string())?;
+            let sig = repo.signature().map_err(|e| e.to_string())?;
+            let message = format!("Merge {remote_name}/{remote_branch} into {local_branch}");
+            let new_oid = repo
+                .commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&local_commit, &upstream_commit])
+                .map_err(|e| e.to_string())?;
+            repo.cleanup_state().map_err(|e| e.to_string())?;
+            Ok(ConflictableOutcome::Completed { sha: new_oid.to_string() })
+        }
+        PullStrategy::Rebase => {
+            if analysis.is_fast_forward() {
+                let refname = local_branch_ref
+                    .get()
+                    .name()
+                    .ok_or_else(|| "Local branch ref has no name.".to_string())?
+                    .to_string();
+                repo.reference(&refname, upstream_oid, true, "pull: fast-forward")
+                    .map_err(|e| e.to_string())?;
+                repo.set_head(&refname).map_err(|e| e.to_string())?;
+                repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                    .map_err(|e| e.to_string())?;
+                return Ok(ConflictableOutcome::Completed { sha: upstream_oid.to_string() });
+            }
+            let rebase = repo
+                .rebase(Some(&local_ac), Some(&upstream_ac), None, None)
+                .map_err(|e| e.to_string())?;
+            drive_rebase_to_completion(repo, rebase)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2256,7 +2816,10 @@ mod tests {
         cherry_pick(&repo, &feature_oid.to_string(), false).unwrap();
 
         let resolved = vec![ResolvedFile { path: "a.txt".to_string(), content: "one\nFEATURE\nthree\n".to_string() }];
-        let new_sha = finish_conflict_resolution(&repo, resolved).unwrap();
+        let outcome = finish_conflict_resolution(&repo, resolved).unwrap();
+        let ConflictableOutcome::Completed { sha: new_sha } = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
 
         assert_eq!(repo.state(), git2::RepositoryState::Clean);
         assert!(!repo.index().unwrap().has_conflicts());
@@ -2286,5 +2849,237 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- Push/Fetch/Pull (SPEC.md item 7, PRD §12) -----------------------------------------
+
+    /// Creates a bare "remote" repo with one commit on `refs/heads/main`, writing objects
+    /// directly (no working tree on a bare repo to write through) — and a local clone of it with
+    /// "origin" already wired up exactly as `git clone` would. Returns `(remote_dir, local_dir,
+    /// local_repo, initial_oid)`.
+    fn remote_and_clone_pair() -> (std::path::PathBuf, std::path::PathBuf, Repository, Oid) {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        // Nanosecond suffix (matching `temp_repo()`'s convention) — without it, a leftover
+        // directory from a previous *panicked* run (which skips `cleanup_pair`) would collide
+        // with this run's `COUNTER`, which always restarts at 0, and its stale refs/objects
+        // would make these tests fail in baffling, run-order-dependent ways.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("trunk-remote-test-{n}-{nanos}"));
+        let remote_dir = base.join("remote");
+        let local_dir = base.join("local");
+        std::fs::create_dir_all(&remote_dir).unwrap();
+
+        let remote_repo = Repository::init_bare(&remote_dir).unwrap();
+        {
+            let mut config = remote_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@example.com").unwrap();
+        }
+        let initial_oid = commit_blob(&remote_repo, "initial", &[], "a.txt", "one\ntwo\nthree\n");
+        remote_repo.set_head("refs/heads/main").unwrap();
+
+        let local_repo = Repository::clone(remote_dir.to_str().unwrap(), &local_dir).unwrap();
+        {
+            let mut config = local_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@example.com").unwrap();
+        }
+        {
+            let mut local_main = local_repo.find_branch("main", BranchType::Local).unwrap();
+            local_main.set_upstream(Some("origin/main")).unwrap();
+        }
+
+        (remote_dir, local_dir, local_repo, initial_oid)
+    }
+
+    /// Like `commit_with_file`, but writes the blob/tree directly through the object database
+    /// instead of through a working tree + index — the only way to add a commit to a bare repo
+    /// (no working tree to write to) or to simulate "someone else pushed" to the remote side of
+    /// a push/fetch/pull test without a second working copy.
+    fn commit_blob(repo: &Repository, message: &str, parents: &[&git2::Commit], file_name: &str, content: &str) -> Oid {
+        let blob_oid = repo.blob(content.as_bytes()).unwrap();
+        // Seeded from the first parent's tree (not `None`, an empty tree) so this commit's tree
+        // carries forward every other file the parent had — otherwise each call would silently
+        // drop every file but the one it's touching, which only happened to go unnoticed by
+        // earlier (single-file) tests.
+        let parent_tree = parents.first().and_then(|p| p.tree().ok());
+        let mut builder = repo.treebuilder(parent_tree.as_ref()).unwrap();
+        builder.insert(file_name, blob_oid, 0o100644).unwrap();
+        let tree_oid = builder.write().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = repo.signature().unwrap();
+        repo.commit(Some("refs/heads/main"), &sig, &sig, message, &tree, parents).unwrap()
+    }
+
+    fn cleanup_pair(remote_dir: &std::path::Path, local_dir: &std::path::Path) {
+        std::fs::remove_dir_all(remote_dir.parent().unwrap()).unwrap();
+        let _ = local_dir;
+    }
+
+    #[test]
+    fn list_local_branches_with_tracking_reports_ahead_and_behind() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+
+        // Remote gains a commit the local clone hasn't fetched yet.
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let initial_commit = remote_repo.find_commit(initial_oid).unwrap();
+        commit_blob(&remote_repo, "remote-only", &[&initial_commit], "b.txt", "remote change\n");
+
+        // Local gains a commit of its own the remote doesn't have.
+        let local_initial = local_repo.find_commit(initial_oid).unwrap();
+        commit_blob(&local_repo, "local-only", &[&local_initial], "c.txt", "local change\n");
+
+        fetch_remote(&local_repo, |_| {}, Some("origin"), false, false, false).unwrap();
+
+        let branches = list_local_branches_with_tracking(&local_repo).unwrap();
+        let main = branches.iter().find(|b| b.name == "main").unwrap();
+        assert_eq!(main.ahead, 1, "local has one commit not on origin/main");
+        assert_eq!(main.behind, 1, "origin/main has one commit not yet merged locally");
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    #[test]
+    fn push_branch_updates_the_remote_tip() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+        let initial_commit = local_repo.find_commit(initial_oid).unwrap();
+        let new_oid = commit_blob(&local_repo, "local change", &[&initial_commit], "b.txt", "hello\n");
+
+        push_branch(&local_repo, |_| {}, "main", "origin", "main", false, false, false).unwrap();
+
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let remote_tip = remote_repo.find_reference("refs/heads/main").unwrap().target().unwrap();
+        assert_eq!(remote_tip, new_oid, "remote main should now point at the pushed commit");
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    #[test]
+    fn push_branch_with_force_with_lease_rejects_a_stale_remote() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+
+        // Someone else pushes to the remote without this clone knowing about it.
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let initial_commit = remote_repo.find_commit(initial_oid).unwrap();
+        commit_blob(&remote_repo, "someone else's push", &[&initial_commit], "b.txt", "surprise\n");
+
+        // This clone, unaware, tries to force-with-lease its own (divergent) local commit.
+        let local_initial = local_repo.find_commit(initial_oid).unwrap();
+        commit_blob(&local_repo, "local change", &[&local_initial], "c.txt", "mine\n");
+
+        let result = push_branch(&local_repo, |_| {}, "main", "origin", "main", false, true, true);
+        assert!(result.is_err(), "force-with-lease should refuse a remote that moved since the last known state");
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    #[test]
+    fn pull_ff_only_fast_forwards_when_remote_is_strictly_ahead() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let initial_commit = remote_repo.find_commit(initial_oid).unwrap();
+        let remote_tip = commit_blob(&remote_repo, "remote-only", &[&initial_commit], "b.txt", "ff me\n");
+
+        let outcome =
+            pull_branch(&local_repo, |_| {}, "main", "origin", "main", PullStrategy::FfOnly).unwrap();
+        let ConflictableOutcome::Completed { sha } = outcome else {
+            panic!("expected a clean fast-forward, got {outcome:?}");
+        };
+        assert_eq!(sha, remote_tip.to_string());
+        assert_eq!(local_repo.head().unwrap().peel_to_commit().unwrap().id(), remote_tip);
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    #[test]
+    fn pull_merge_strategy_hands_off_a_real_conflict_to_the_resolver() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let initial_commit = remote_repo.find_commit(initial_oid).unwrap();
+        commit_blob(&remote_repo, "remote edits a.txt", &[&initial_commit], "a.txt", "one\nREMOTE\nthree\n");
+
+        let local_initial = local_repo.find_commit(initial_oid).unwrap();
+        commit_with_file(&local_repo, &local_dir, "local edits a.txt", &[&local_initial], "a.txt", "one\nLOCAL\nthree\n");
+
+        let outcome =
+            pull_branch(&local_repo, |_| {}, "main", "origin", "main", PullStrategy::Merge).unwrap();
+        assert!(matches!(outcome, ConflictableOutcome::Conflict));
+        assert_eq!(local_repo.state(), git2::RepositoryState::Merge);
+
+        let resolved = vec![ResolvedFile { path: "a.txt".to_string(), content: "one\nBOTH\nthree\n".to_string() }];
+        let finish = finish_conflict_resolution(&local_repo, resolved).unwrap();
+        assert!(matches!(finish, ConflictableOutcome::Completed { .. }));
+        assert_eq!(local_repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(
+            std::fs::read_to_string(local_dir.join("a.txt")).unwrap(),
+            "one\nBOTH\nthree\n"
+        );
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    #[test]
+    fn pull_rebase_strategy_pauses_and_resumes_across_two_separate_conflicts() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+        // A second file, present from the common ancestor onward, so each local commit below can
+        // conflict on its *own* file independently of the other — avoiding any ambiguity from a
+        // single shared file where one step's resolution could incidentally satisfy the next.
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let initial_commit = remote_repo.find_commit(initial_oid).unwrap();
+        let common_oid = commit_blob(&remote_repo, "add b.txt", &[&initial_commit], "b.txt", "orig-b\n");
+        let common_commit = remote_repo.find_commit(common_oid).unwrap();
+        // Remote then edits both files, so each of the two local commits below (one per file)
+        // conflicts with a *different* rebase step — exercising the multi-step continuation loop
+        // (`drive_rebase_to_completion`), not just a single paused step.
+        commit_blob(&remote_repo, "remote edits both files", &[&common_commit], "a.txt", "remote-a\n");
+        let remote_tip = remote_repo.find_reference("refs/heads/main").unwrap().peel_to_commit().unwrap();
+        let blob_oid = remote_repo.blob(b"remote-b\n").unwrap();
+        let mut builder = remote_repo.treebuilder(Some(&remote_tip.tree().unwrap())).unwrap();
+        builder.insert("b.txt", blob_oid, 0o100644).unwrap();
+        let tree = remote_repo.find_tree(builder.write().unwrap()).unwrap();
+        let sig = remote_repo.signature().unwrap();
+        remote_repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "remote edits b.txt too", &tree, &[&remote_tip])
+            .unwrap();
+
+        fetch_remote(&local_repo, |_| {}, Some("origin"), false, false, false).unwrap();
+        let common_local_commit = local_repo.find_commit(common_oid).unwrap();
+        // Sync HEAD/workdir/index to the common ancestor (which already has b.txt) before
+        // building local commits on top via `commit_with_file` — otherwise the still-checked-out
+        // initial-commit tree (no b.txt) would make the first local commit look like it deletes
+        // b.txt instead of cleanly adding only a.txt.
+        local_repo
+            .reset(common_local_commit.as_object(), git2::ResetType::Hard, None)
+            .unwrap();
+        let local_first =
+            commit_with_file(&local_repo, &local_dir, "local edits a.txt", &[&common_local_commit], "a.txt", "local-a\n");
+        {
+            let local_first_commit = local_repo.find_commit(local_first).unwrap();
+            commit_with_file(&local_repo, &local_dir, "local edits b.txt", &[&local_first_commit], "b.txt", "local-b\n");
+        }
+
+        let outcome =
+            pull_branch(&local_repo, |_| {}, "main", "origin", "main", PullStrategy::Rebase).unwrap();
+        assert!(matches!(outcome, ConflictableOutcome::Conflict), "first rebased commit should conflict on a.txt");
+        assert!(matches!(
+            local_repo.state(),
+            git2::RepositoryState::Rebase | git2::RepositoryState::RebaseInteractive | git2::RepositoryState::RebaseMerge
+        ));
+
+        let resolved_step_1 = vec![ResolvedFile { path: "a.txt".to_string(), content: "both-a\n".to_string() }];
+        let after_step_1 = finish_conflict_resolution(&local_repo, resolved_step_1).unwrap();
+        assert!(
+            matches!(after_step_1, ConflictableOutcome::Conflict),
+            "second rebased commit should independently conflict on b.txt, re-pausing instead of finishing"
+        );
+
+        let resolved_step_2 = vec![ResolvedFile { path: "b.txt".to_string(), content: "both-b\n".to_string() }];
+        let after_step_2 = finish_conflict_resolution(&local_repo, resolved_step_2).unwrap();
+        assert!(matches!(after_step_2, ConflictableOutcome::Completed { .. }), "rebase should finish after the second conflict resolves");
+        assert_eq!(local_repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(std::fs::read_to_string(local_dir.join("a.txt")).unwrap(), "both-a\n");
+        assert_eq!(std::fs::read_to_string(local_dir.join("b.txt")).unwrap(), "both-b\n");
+
+        cleanup_pair(&remote_dir, &local_dir);
     }
 }

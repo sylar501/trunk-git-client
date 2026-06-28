@@ -350,7 +350,19 @@ export async function mountConflictResolver(root, repoPath, { onDone, mergedHeig
     if (continueBtn.classList.contains("disabled")) return;
     const files = session.files.map((path) => ({ path, content: finalText(fileStates.get(path)) }));
     try {
-      await finishConflictResolution(repoPath, files);
+      const outcome = await finishConflictResolution(repoPath, files);
+      // A rebase can hand back another conflict instead of finishing — the next commit in the
+      // rebase also conflicted, so reload the session and keep resolving rather than exiting.
+      if (outcome.status === "conflict") {
+        showToast({ variant: "warning", message: "Resolved — the next commit in the rebase also conflicts." });
+        selectedPath = null;
+        const ok = await loadSession();
+        if (!ok) return;
+        renderTabs();
+        renderProgress();
+        if (session.files.length > 0) await selectFile(session.files[0]);
+        return;
+      }
       showToast({ variant: "success", message: "Conflict resolved." });
       onDone?.();
     } catch (err) {

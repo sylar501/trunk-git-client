@@ -8,7 +8,7 @@ use crate::settings::{self, AppSettings};
 use crate::state::{AppMode, AppState, AppStateView};
 use crate::workspace;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Server-side cache for the active repo's commit graph (PRD §7) — keyed by repo path so a
 /// stale `get_graph_rows` call against a since-switched repo is rejected rather than silently
@@ -443,21 +443,26 @@ pub async fn get_conflict_file(
     .map_err(|e| e.to_string())?
 }
 
+/// Returns `ConflictableOutcome` rather than a bare sha: a resolved rebase step can hand back
+/// another `Conflict` (the next commit in the rebase also conflicts) instead of finishing, in
+/// which case `conflicted_repos` deliberately stays untouched below.
 #[tauri::command]
 pub async fn finish_conflict_resolution(
     state: State<'_, Mutex<AppState>>,
     repo_path: String,
     files: Vec<git::ResolvedFile>,
-) -> Result<String, String> {
+) -> Result<git::ConflictableOutcome, String> {
     let path_for_open = repo_path.clone();
-    let sha = tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
         repo.finish_conflict_resolution(files)
     })
     .await
     .map_err(|e| e.to_string())??;
-    state.lock().unwrap().conflicted_repos.remove(&repo_path);
-    Ok(sha)
+    if !matches!(outcome, git::ConflictableOutcome::Conflict) {
+        state.lock().unwrap().conflicted_repos.remove(&repo_path);
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -576,5 +581,137 @@ pub fn commit_changes(repo_path: String, message: String, amend: bool, ssh_sign:
     repo.commit_changes(&message, amend, ssh_sign)
 }
 
-// Reserved for future sessions: branch/tag/stash/remote CRUD, push/fetch/pull,
-// interactive rebase, conflict resolution, terminal pty I/O (see git/terminal modules).
+// --- Push / Fetch / Pull (PRD §12, SPEC.md item 7) ----------------------------------------
+
+#[tauri::command]
+pub fn list_remotes(repo_path: String) -> Result<Vec<String>, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.list_remotes()
+}
+
+#[tauri::command]
+pub fn get_remote_url(repo_path: String, remote_name: String) -> Result<String, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.remote_url(&remote_name)
+}
+
+#[tauri::command]
+pub fn list_branches_with_tracking(repo_path: String) -> Result<Vec<git::RemoteBranchInfo>, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.list_local_branches_with_tracking()
+}
+
+#[tauri::command]
+pub fn list_commits_ahead(
+    repo_path: String,
+    local_branch: String,
+    remote_name: String,
+    remote_branch: String,
+) -> Result<Vec<git::CommitSummary>, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.list_commits_ahead(&local_branch, &remote_name, &remote_branch)
+}
+
+#[tauri::command]
+pub fn list_commits_behind(
+    repo_path: String,
+    local_branch: String,
+    remote_name: String,
+    remote_branch: String,
+) -> Result<Vec<git::CommitSummary>, String> {
+    let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+    repo.list_commits_behind(&local_branch, &remote_name, &remote_branch)
+}
+
+#[tauri::command]
+pub async fn push_branch(
+    app: AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    local_branch: String,
+    remote_name: String,
+    remote_branch: String,
+    set_upstream: bool,
+    force: bool,
+    force_with_lease: bool,
+) -> Result<(), String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.push_branch(
+            move |payload| {
+                let _ = app.emit("push-progress", payload);
+            },
+            &local_branch,
+            &remote_name,
+            &remote_branch,
+            set_upstream,
+            force,
+            force_with_lease,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn fetch_remote(
+    app: AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    remote_name: Option<String>,
+    prune: bool,
+    tags: bool,
+    submodules: bool,
+) -> Result<git::FetchOutcome, String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.fetch_remote(
+            move |payload| {
+                let _ = app.emit("fetch-progress", payload);
+            },
+            remote_name.as_deref(),
+            prune,
+            tags,
+            submodules,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn pull_branch(
+    app: AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    local_branch: String,
+    remote_name: String,
+    remote_branch: String,
+    strategy: git::PullStrategy,
+) -> Result<git::ConflictableOutcome, String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    let path_for_open = repo_path.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.pull_branch(
+            move |payload| {
+                let _ = app.emit("fetch-progress", payload);
+            },
+            &local_branch,
+            &remote_name,
+            &remote_branch,
+            strategy,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if matches!(outcome, git::ConflictableOutcome::Conflict) {
+        state.lock().unwrap().conflicted_repos.insert(repo_path);
+    }
+    Ok(outcome)
+}
+
+// Reserved for future sessions: branch/tag/stash/remote CRUD (beyond push/fetch/pull above),
+// interactive rebase, terminal pty I/O (see git/terminal modules).

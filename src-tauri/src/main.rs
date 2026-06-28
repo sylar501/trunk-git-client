@@ -52,6 +52,14 @@ fn main() {
             commands::unstage_line,
             commands::get_last_commit_message,
             commands::commit_changes,
+            commands::list_remotes,
+            commands::get_remote_url,
+            commands::list_branches_with_tracking,
+            commands::list_commits_ahead,
+            commands::list_commits_behind,
+            commands::push_branch,
+            commands::fetch_remote,
+            commands::pull_branch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running trunk");

@@ -194,6 +194,7 @@ textarea,
 .dh-icon.ic-r { background: var(--red-bg); color: var(--red); }
 .dh-icon.ic-a { background: var(--amber-bg); color: var(--amber); }
 .dh-icon.ic-p { background: var(--purple-bg); color: var(--purple); }
+.dh-icon.ic-n { background: var(--bg-tertiary); color: var(--text-secondary); }
 
 .dh-title {
   font-size: 12px;
@@ -234,6 +235,30 @@ textarea,
   color: var(--text-primary);
   font-size: 11px;
   font-family: inherit;
+}
+
+/* `<select>` needs its native OS/WebView chrome reset — without `appearance: none` the closed
+   box renders with the platform's own (light) widget background regardless of `background`
+   above (seen on WebKitGTK/Linux); a CSS-drawn caret replaces the native dropdown arrow. */
+select.inp {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 24px;
+}
+
+select.inp:disabled {
+  opacity: 0.5;
+}
+
+select.inp option {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .inp.ok { border-color: var(--green); }
@@ -1601,4 +1626,93 @@ textarea,
   padding: 0 12px;
   border-top: 0.5px solid var(--border-subtle);
   background: var(--bg-primary);
+}
+
+/* ── Push / Fetch / Pull dialogs (PRD §12, SPEC.md item 7) ───────────── */
+
+.pf-from-to {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pf-from-to .inp {
+  flex: 1;
+  min-width: 0;
+}
+
+.pf-from-to-arrow {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.pf-commit-list {
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+}
+
+.pf-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 10px;
+  border-bottom: 0.5px solid var(--border-subtle);
+}
+
+.pf-commit-row:last-child {
+  border-bottom: none;
+}
+
+.pf-commit-sha {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--text-tertiary);
+}
+
+.pf-commit-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.pf-commit-meta {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.pf-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.pf-badge-new { background: var(--green-bg); color: var(--green); }
+.pf-badge-incoming { background: var(--blue-bg); color: var(--blue); }
+
+.pf-radio-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.pf-radio-opt input[type="radio"] {
+  margin-top: 2px;
+}
+
+.pf-radio-opt-title {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.pf-radio-opt-desc {
+  font-size: 10px;
+  color: var(--text-secondary);
 }

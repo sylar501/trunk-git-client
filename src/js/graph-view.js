@@ -9,6 +9,9 @@ import { createCommitRow, laneColumnWidth } from "../components/commit-row.js";
 import { createCommitOverlay } from "../components/commit-overlay.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
 import { openConflictableActionDialog } from "./conflictable-action-dialog.js";
+import { openPushDialog } from "./push-dialog.js";
+import { openFetchDialog } from "./fetch-dialog.js";
+import { openPullDialog } from "./pull-dialog.js";
 import { showToast } from "../components/toast.js";
 import { attachResizeHandle } from "../components/resize-handle.js";
 
@@ -64,6 +67,9 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
       <div class="fpill" data-quick="week">this week</div>
       <div class="fpill" id="g-toggle-filters">filters</div>
       <div class="tb-spacer"></div>
+      <div class="btn btn-blue" id="g-push">Push</div>
+      <div class="btn btn-neutral" id="g-fetch">Fetch</div>
+      <div class="btn btn-amber" id="g-pull">Pull</div>
       ${
         conflicted
           ? '<div class="btn btn-amber" id="g-stage">Resolve conflicts</div>'
@@ -187,6 +193,13 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
   // normalization convention to copy; just accept either modifier key. While conflicted, this
   // shortcut is a no-op — the button it would otherwise activate is "Resolve conflicts", not
   // "Stage changes", and staging doesn't make sense with unmerged paths in the index anyway.
+  // Push/Fetch/Pull (PRD §12, SPEC.md item 7) — fire-and-forget, same convention as the
+  // cherry-pick/revert/branch-from-here dialogs above: each dialog only resolves once something
+  // actually happened, never on Cancel/Escape, and `onMutated` refreshes sidebar+graph together.
+  canvas.querySelector("#g-push").addEventListener("click", () => openPushDialog({ repoPath, onMutated }), { signal });
+  canvas.querySelector("#g-fetch").addEventListener("click", () => openFetchDialog({ repoPath, onMutated }), { signal });
+  canvas.querySelector("#g-pull").addEventListener("click", () => openPullDialog({ repoPath, onMutated }), { signal });
+
   const stageBtn = canvas.querySelector("#g-stage");
   let hasPendingChanges = false;
 
