@@ -842,9 +842,10 @@ pub enum ConflictableOutcome {
     Completed { sha: String },
     /// `no_commit: true` and the apply was clean — matches plain `git cherry-pick -n`/
     /// `git revert -n`: the index/working tree carry the applied change, but deliberately no
-    /// commit is created and `CHERRY_PICK_HEAD`/`REVERT_HEAD` is left in place (not cleaned up)
-    /// so a subsequent manual commit still gets the right prefilled message, and `--abort`
-    /// still works, the same as real git leaves it.
+    /// commit is created. Unlike the conflict path below, `CHERRY_PICK_HEAD`/`REVERT_HEAD` *is*
+    /// cleaned up here (`cleanup_state()`) — a single non-conflicting `-n` pick leaves no
+    /// lingering sequencer state in real git either, and leaving it would make `has_conflict()`
+    /// (`state() != Clean`) wrongly treat these intentionally-uncommitted changes as a conflict.
     AppliedNoCommit,
     Conflict,
 }
@@ -888,6 +889,15 @@ fn cherry_pick(repo: &Repository, sha: &str, no_commit: bool) -> Result<Conflict
         return Ok(ConflictableOutcome::Conflict);
     }
     if no_commit {
+        // libgit2's `cherrypick()` always writes `CHERRY_PICK_HEAD` and sets the repo state to
+        // "in progress", regardless of `no_commit` — real `git cherry-pick -n` doesn't leave that
+        // lingering for a single non-conflicting commit, and neither should this: without the
+        // cleanup, `has_conflict()` (state != Clean) would report a conflict that doesn't exist,
+        // surfacing a phantom "Resolve conflicts" button whose Abort would then discard these
+        // intentionally-uncommitted changes. `cleanup_state()` only removes the sequencer
+        // bookkeeping files — it doesn't touch the index/working tree, so the applied changes
+        // this call exists to produce are left exactly as they are.
+        repo.cleanup_state().map_err(|e| e.to_string())?;
         return Ok(ConflictableOutcome::AppliedNoCommit);
     }
 
@@ -933,6 +943,8 @@ fn revert_commit(repo: &Repository, sha: &str, no_commit: bool) -> Result<Confli
         return Ok(ConflictableOutcome::Conflict);
     }
     if no_commit {
+        // Same lingering-state issue `cherry_pick` has — see its matching comment above.
+        repo.cleanup_state().map_err(|e| e.to_string())?;
         return Ok(ConflictableOutcome::AppliedNoCommit);
     }
 
@@ -3151,9 +3163,39 @@ mod tests {
         let b = status.files.iter().find(|f| f.path == "b.txt").unwrap();
         assert!(b.staged, "no-commit cherry-pick should leave the change staged");
 
-        // CHERRY_PICK_HEAD left in place (state not cleaned up) — same as plain
-        // `git cherry-pick -n`, so a later manual commit or `--abort` still works.
-        assert_eq!(repo.state(), git2::RepositoryState::CherryPick);
+        // Regression: libgit2's `cherrypick()` always writes `CHERRY_PICK_HEAD`/sets the repo
+        // state to "in progress", unlike plain `git cherry-pick -n` on a single non-conflicting
+        // commit, which leaves no lingering sequencer state. Without `cleanup_state()`, this
+        // state was wrongly read back as a real conflict (`has_conflict()` checks `state() !=
+        // Clean`), surfacing a phantom "Resolve conflicts" button whose Abort then discarded
+        // these intentionally-uncommitted changes.
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn revert_no_commit_applies_to_index_without_creating_a_commit() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "first", &[], "a.txt", "one\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let c2 = commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "two\n");
+
+        let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let outcome = revert_commit(&repo, &c2.to_string(), true).unwrap();
+        assert!(matches!(outcome, ConflictableOutcome::AppliedNoCommit));
+
+        let head_after = repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert_eq!(head_before, head_after, "no-commit revert must not move HEAD");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\n");
+
+        let status = working_tree_status(&repo).unwrap();
+        let a = status.files.iter().find(|f| f.path == "a.txt").unwrap();
+        assert!(a.staged, "no-commit revert should leave the change staged");
+
+        // Same regression as `cherry_pick_no_commit_applies_to_index_without_creating_a_commit`
+        // — `REVERT_HEAD`/state must be cleaned up so this doesn't read back as a phantom conflict.
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
