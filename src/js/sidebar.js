@@ -5,12 +5,16 @@
 // shipped/tested behaviour); Branches rows are built via `sidebar-item.js`'s factory, the
 // only place that file is used in this session.
 
-import { switchActiveRepository, getAppState, listBranches } from "./app.js";
+import { switchActiveRepository, getAppState, listBranches, getWorkingTreeStatus, checkoutBranch } from "./app.js";
 import { openContextMenu } from "../components/context-menu.js";
 import { showToast } from "../components/toast.js";
 import { openDialog } from "../components/dialog.js";
 import { createSidebarItem, createSidebarSection } from "../components/sidebar-item.js";
 import { laneColorVar } from "../components/commit-row.js";
+import { confirmDirtyTreeStrategy } from "./branch-dialog-shared.js";
+import { openSwitchBranchDialog } from "./switch-branch-dialog.js";
+import { openRenameBranchDialog } from "./rename-branch-dialog.js";
+import { openDeleteBranchDialog } from "./delete-branch-dialog.js";
 
 /// Mid-conflict-resolution repo switch (PRD §15.4.4, line 540) warns instead of blocking —
 /// unlike `rebase_in_progress`, which `switch_active_repository` hard-rejects server-side with
@@ -61,9 +65,49 @@ function openBackToWelcomeMenu(e) {
   ]);
 }
 
-async function appendBranchesSection(container, repoPath) {
+/// Direct sidebar-row click switch (PRD §6's mouse-profile "Switch branch" capability) — unlike
+/// the full Switch dialog (⌘B, switch-branch-dialog.js), the target is already known so this
+/// just runs the dirty-tree check + `checkoutBranch` inline, mirroring the Repositories section's
+/// own row-click pattern just above (spinner swapped in immediately, single in-flight switch at
+/// a time).
+async function switchToBranchFromSidebar(repoPath, name, dotEl, onBranchChanged) {
+  dotEl.outerHTML = `<div class="spinner"></div>`;
+  try {
+    let dirty = false;
+    try {
+      dirty = (await getWorkingTreeStatus(repoPath)).files.length > 0;
+    } catch {
+      dirty = false;
+    }
+    let dirtyStrategy;
+    if (dirty) {
+      dirtyStrategy = await confirmDirtyTreeStrategy();
+      if (!dirtyStrategy) return false;
+    }
+    await checkoutBranch(repoPath, name, { dirtyStrategy });
+    await onBranchChanged?.();
+    return true;
+  } catch (err) {
+    showToast({ variant: "danger", message: String(err) });
+    return false;
+  }
+}
+
+/**
+ * @param {HTMLElement} container
+ * @param {string} repoPath
+ * @param {{ onBranchChanged?: () => Promise<void>|void }} handlers
+ */
+async function appendBranchesSection(container, repoPath, handlers = {}) {
   if (!repoPath) return;
-  container.append(createSidebarSection("Branches"));
+  container.append(
+    createSidebarSection("Branches", {
+      actionLabel: "⇄",
+      onAction: () => {
+        openSwitchBranchDialog({ repoPath, onMutated: handlers.onBranchChanged });
+      },
+    })
+  );
 
   // Branch enumeration is cheap on a small repo but can still lag on a large one (many refs,
   // slow disk) — show immediate feedback rather than leaving the section looking frozen
@@ -81,22 +125,54 @@ async function appendBranchesSection(container, repoPath) {
     return; // repo unreadable (e.g. stale) — section header alone is harmless
   }
   loadingRow.remove();
+  const existingNames = branches.map((b) => b.name);
+  let switching = false;
+
   for (const branch of branches) {
-    container.append(
-      createSidebarItem({
-        dotColor: laneColorVar(branch.color_index),
-        label: branch.name,
-        badgeText: branch.is_head ? "HEAD" : undefined,
-        active: branch.is_head,
-      })
-    );
+    const row = createSidebarItem({
+      dotColor: laneColorVar(branch.color_index),
+      label: branch.name,
+      badgeText: branch.is_head ? "HEAD" : undefined,
+      active: branch.is_head,
+    });
+
+    if (!branch.is_head) {
+      row.addEventListener("click", async () => {
+        if (switching) return;
+        switching = true;
+        const ok = await switchToBranchFromSidebar(repoPath, branch.name, row.querySelector(".sb-dot"), handlers.onBranchChanged);
+        if (!ok) switching = false;
+      });
+    }
+
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openContextMenu(e.clientX, e.clientY, [
+        {
+          label: "Rename…",
+          onClick: () => openRenameBranchDialog({ repoPath, name: branch.name, existingNames, onMutated: handlers.onBranchChanged }),
+        },
+        ...(branch.is_head
+          ? []
+          : [
+              "separator",
+              {
+                label: "Delete…",
+                danger: true,
+                onClick: () => openDeleteBranchDialog({ repoPath, name: branch.name, onMutated: handlers.onBranchChanged }),
+              },
+            ]),
+      ]);
+    });
+
+    container.append(row);
   }
 }
 
 /**
  * @param {HTMLElement} container
  * @param {object} appState - shape returned by `getAppState()` / `open_workspace`.
- * @param {object} handlers - { onAddExisting(), onCloneNew(), onSwitched() }
+ * @param {object} handlers - { onAddExisting(), onCloneNew(), onSwitched(), onBranchChanged() }
  */
 export async function renderSidebar(container, appState, handlers = {}) {
   container.innerHTML = "";
@@ -108,7 +184,7 @@ export async function renderSidebar(container, appState, handlers = {}) {
     row.querySelector(".ws-name").textContent = basename(appState.repo_path || "");
     row.addEventListener("click", openBackToWelcomeMenu);
     container.append(row);
-    await appendBranchesSection(container, appState.repo_path);
+    await appendBranchesSection(container, appState.repo_path, handlers);
     return;
   }
 
@@ -175,5 +251,5 @@ export async function renderSidebar(container, appState, handlers = {}) {
     container.append(row);
   }
 
-  await appendBranchesSection(container, appState.active_repo);
+  await appendBranchesSection(container, appState.active_repo, handlers);
 }

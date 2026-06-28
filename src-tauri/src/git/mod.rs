@@ -73,8 +73,33 @@ impl Repo {
         abort_in_progress_operation(&self.inner).map_err(|e| e.to_string())
     }
 
-    pub fn create_branch_at(&self, sha: &str, name: &str) -> Result<(), String> {
-        create_branch_at(&self.inner, sha, name)
+    pub fn create_branch_at(&self, sha: &str, name: &str, checkout: bool) -> Result<(), String> {
+        create_branch_at(&self.inner, sha, name, checkout)
+    }
+
+    pub fn list_branches_for_switch(&self) -> Result<Vec<SwitchBranchEntry>, String> {
+        list_branches_for_switch(&self.inner)
+    }
+
+    pub fn checkout_branch(
+        &self,
+        name: &str,
+        remote: Option<(&str, &str)>,
+        dirty_strategy: Option<DirtyTreeStrategy>,
+    ) -> Result<(), String> {
+        checkout_branch(&self.inner, name, remote, dirty_strategy)
+    }
+
+    pub fn get_branch_delete_info(&self, name: &str) -> Result<BranchDeleteInfo, String> {
+        get_branch_delete_info(&self.inner, name)
+    }
+
+    pub fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<(), String> {
+        rename_branch(&self.inner, old_name, new_name)
+    }
+
+    pub fn delete_branch(&self, name: &str, force: bool, also_delete_remote: bool) -> Result<(), String> {
+        delete_branch(&self.inner, name, force, also_delete_remote)
     }
 
     pub fn working_tree_status(&self) -> Result<WorkingTreeStatus, String> {
@@ -291,6 +316,10 @@ pub struct BranchInfo {
     pub name: String,
     pub is_head: bool,
     pub color_index: u8,
+    /// Tip SHA — lets the Create-branch dialog's starting-point dropdown (§13.1, SPEC.md item
+    /// 8) resolve a chosen branch straight to `create_branch_at`'s `sha` param without a second
+    /// round trip.
+    pub sha: String,
 }
 
 /// Composable commit-graph filter (PRD §7.3). All fields optional/AND-combined.
@@ -391,10 +420,12 @@ fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>, git2::Error> {
     for branch in repo.branches(Some(BranchType::Local))? {
         let (branch, _) = branch?;
         if let Some(name) = branch.name()? {
+            let sha = branch.get().target().map(|oid| oid.to_string()).unwrap_or_default();
             out.push(BranchInfo {
                 name: name.to_string(),
                 is_head: branch.is_head(),
                 color_index: branch_color_index(name),
+                sha,
             });
         }
     }
@@ -1131,15 +1162,18 @@ fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Re
     Ok(ConflictableOutcome::Completed { sha: new_oid.to_string() })
 }
 
-/// Creates a branch at `sha` and checks it out — deliberately a minimal placeholder (no
-/// real-time name validation, no starting-point picker) ahead of SPEC.md item 8's full "Create
-/// Branch" dialog. `repo.branch(..., force: false)` surfaces git2's natural duplicate-name error
-/// rather than silently overwriting; `checkout_head(None)` uses libgit2's default *non-forced*
-/// safety checks, so a conflicting dirty working tree fails loudly instead of being clobbered.
-fn create_branch_at(repo: &Repository, sha: &str, name: &str) -> Result<(), String> {
+/// Creates a branch at `sha`, optionally checking it out (SPEC.md item 8's "Checkout after
+/// creating" checkbox, default on). `repo.branch(..., force: false)` surfaces git2's natural
+/// duplicate-name error rather than silently overwriting; `checkout_head(None)` uses libgit2's
+/// default *non-forced* safety checks, so a conflicting dirty working tree fails loudly instead
+/// of being clobbered.
+fn create_branch_at(repo: &Repository, sha: &str, name: &str, checkout: bool) -> Result<(), String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
     let branch = repo.branch(name, &commit, false).map_err(|e| e.to_string())?;
+    if !checkout {
+        return Ok(());
+    }
     let refname = branch
         .get()
         .name()
@@ -1147,6 +1181,250 @@ fn create_branch_at(repo: &Repository, sha: &str, name: &str) -> Result<(), Stri
         .to_string();
     repo.set_head(&refname).map_err(|e| e.to_string())?;
     repo.checkout_head(None).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// --- Branch CRUD: switch/rename/delete (SPEC.md item 8, PRD §13) ---------------------------
+
+/// One row in the Switch-branch dialog's combined local + remote-only list (§13.2).
+#[derive(Debug, Clone, Serialize)]
+pub struct SwitchBranchEntry {
+    pub name: String,
+    pub is_head: bool,
+    pub color_index: u8,
+    pub is_remote_only: bool,
+    /// `<remote>/<branch>` for a remote-only row; `None` for a local branch (its tracking info,
+    /// if any, is already covered by `list_branches_with_tracking` elsewhere).
+    pub remote_label: Option<String>,
+    pub last_commit_time: i64,
+}
+
+fn list_branches_for_switch(repo: &Repository) -> Result<Vec<SwitchBranchEntry>, String> {
+    let mut local_names: HashSet<String> = HashSet::new();
+    let mut out = Vec::new();
+
+    for branch in repo.branches(Some(BranchType::Local)).map_err(|e| e.to_string())? {
+        let (branch, _) = branch.map_err(|e| e.to_string())?;
+        let Some(name) = branch.name().map_err(|e| e.to_string())?.map(str::to_string) else {
+            continue;
+        };
+        local_names.insert(name.clone());
+        let last_commit_time = branch
+            .get()
+            .target()
+            .and_then(|oid| repo.find_commit(oid).ok())
+            .map(|c| c.time().seconds())
+            .unwrap_or(0);
+        out.push(SwitchBranchEntry {
+            name: name.clone(),
+            is_head: branch.is_head(),
+            color_index: branch_color_index(&name),
+            is_remote_only: false,
+            remote_label: None,
+            last_commit_time,
+        });
+    }
+    out.sort_by(|a, b| b.last_commit_time.cmp(&a.last_commit_time));
+
+    let mut remote_only = Vec::new();
+    for branch in repo.branches(Some(BranchType::Remote)).map_err(|e| e.to_string())? {
+        let (branch, _) = branch.map_err(|e| e.to_string())?;
+        let Some(full_name) = branch.name().map_err(|e| e.to_string())?.map(str::to_string) else {
+            continue;
+        };
+        // `<remote>/HEAD` is a symbolic pointer, not a checkout target.
+        let Some((remote, short_name)) = full_name.split_once('/') else { continue };
+        if short_name == "HEAD" || local_names.contains(short_name) {
+            continue;
+        }
+        let last_commit_time = branch
+            .get()
+            .target()
+            .and_then(|oid| repo.find_commit(oid).ok())
+            .map(|c| c.time().seconds())
+            .unwrap_or(0);
+        remote_only.push(SwitchBranchEntry {
+            name: short_name.to_string(),
+            is_head: false,
+            color_index: branch_color_index(short_name),
+            is_remote_only: true,
+            remote_label: Some(format!("{remote}/{short_name}")),
+            last_commit_time,
+        });
+    }
+    remote_only.sort_by(|a, b| b.last_commit_time.cmp(&a.last_commit_time));
+    out.extend(remote_only);
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirtyTreeStrategy {
+    /// `git stash` before checkout, reapply after (§13.2's default radio option).
+    Stash,
+    /// Check out without stashing — libgit2's own safe (non-forced) checkout naturally refuses
+    /// if it would clobber a dirty path, which is exactly the "may fail on conflict" behaviour
+    /// §13.2 describes for this option.
+    Carry,
+}
+
+/// Switches HEAD to `name` (a local branch, or — when `remote` is given — creates a local
+/// tracking branch for a remote-only one first, matching the "Checkout & track" button label).
+/// `dirty_strategy` is only consulted when the working tree is actually dirty; a clean tree
+/// ignores it entirely.
+fn checkout_branch(
+    repo: &Repository,
+    name: &str,
+    remote: Option<(&str, &str)>,
+    dirty_strategy: Option<DirtyTreeStrategy>,
+) -> Result<(), String> {
+    if let Some((remote_name, remote_branch)) = remote {
+        let remote_ref = format!("refs/remotes/{remote_name}/{remote_branch}");
+        let target = repo.refname_to_id(&remote_ref).map_err(|e| e.to_string())?;
+        let commit = repo.find_commit(target).map_err(|e| e.to_string())?;
+        let mut branch = repo.branch(name, &commit, false).map_err(|e| e.to_string())?;
+        branch
+            .set_upstream(Some(&format!("{remote_name}/{remote_branch}")))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let dirty = !is_working_tree_clean(repo).map_err(|e| e.to_string())?;
+    let stash_sig = if dirty && matches!(dirty_strategy, Some(DirtyTreeStrategy::Stash)) {
+        Some(repo.signature().map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+
+    if dirty && dirty_strategy.is_none() {
+        return Err("Working tree has uncommitted changes — choose how to handle them before switching.".to_string());
+    }
+
+    if let Some(sig) = &stash_sig {
+        // `stash_save2` needs `&mut Repository`, but `checkout_branch` only takes `&Repository`
+        // (matching every other free function in this file, which all go through `Repo`'s
+        // shared `&self.inner`) — open a second, independent handle onto the same on-disk repo
+        // rather than threading `&mut` through the whole call chain for this one caller.
+        let mut repo_mut = Repository::open(repo.path()).map_err(|e| e.to_string())?;
+        repo_mut
+            .stash_save2(sig, None, Some(git2::StashFlags::INCLUDE_UNTRACKED))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let branch_ref = repo.find_branch(name, BranchType::Local).map_err(|e| e.to_string())?;
+    let refname = branch_ref
+        .get()
+        .name()
+        .ok_or_else(|| "Branch has an invalid reference name.".to_string())?
+        .to_string();
+
+    let checkout_result = (|| {
+        repo.set_head(&refname).map_err(|e| e.to_string())?;
+        repo.checkout_head(None).map_err(|e| e.to_string())
+    })();
+
+    if stash_sig.is_some() {
+        let mut repo_mut = Repository::open(repo.path()).map_err(|e| e.to_string())?;
+        // Best-effort: if the checkout itself failed, there's nothing to reapply onto; if it
+        // succeeded but the pop conflicts, surface that as the operation's own error rather than
+        // swallowing it — the stash stays on the stack either way so nothing is lost.
+        if checkout_result.is_ok() {
+            repo_mut.stash_pop(0, None).map_err(|e| e.to_string())?;
+        }
+    }
+
+    checkout_result
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BranchDeleteInfo {
+    pub merged: bool,
+    pub commit_loss_count: usize,
+}
+
+/// §13.4's safe/destructive delete-dialog split: a branch is "safe" when its tip is an ancestor
+/// of HEAD (fully merged in); otherwise reports how many of its commits HEAD doesn't have.
+fn get_branch_delete_info(repo: &Repository, name: &str) -> Result<BranchDeleteInfo, String> {
+    let branch_oid = repo
+        .find_branch(name, BranchType::Local)
+        .map_err(|e| e.to_string())?
+        .get()
+        .target()
+        .ok_or_else(|| "Branch has no commits yet.".to_string())?;
+    let head_oid = repo
+        .head()
+        .map_err(|e| e.to_string())?
+        .target()
+        .ok_or_else(|| "HEAD has no commits yet.".to_string())?;
+    let merged = branch_oid == head_oid || repo.graph_descendant_of(head_oid, branch_oid).map_err(|e| e.to_string())?;
+    let commit_loss_count = if merged {
+        0
+    } else {
+        let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+        walk.push(branch_oid).map_err(|e| e.to_string())?;
+        walk.hide(head_oid).map_err(|e| e.to_string())?;
+        walk.count()
+    };
+    Ok(BranchDeleteInfo { merged, commit_loss_count })
+}
+
+/// No remote-tracking-ref rename — §13.3's dialog explains this as a static warning rather than
+/// the backend trying to also rename the upstream ref (which git itself doesn't do either).
+fn rename_branch(repo: &Repository, old_name: &str, new_name: &str) -> Result<(), String> {
+    let mut branch = repo.find_branch(old_name, BranchType::Local).map_err(|e| e.to_string())?;
+    branch.rename(new_name, false).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// `force` only changes whether git2's own merge-safety check is bypassed — `delete_branch_info`
+/// is what actually drives the dialog's safe/destructive split; this just performs the deletion
+/// once the dialog has gated it via the mandatory acknowledgement checkbox. git2 itself refuses
+/// to delete the currently checked-out branch, which is the right behaviour here too (no special
+/// casing needed).
+fn delete_branch(repo: &Repository, name: &str, force: bool, also_delete_remote: bool) -> Result<(), String> {
+    let mut branch = repo.find_branch(name, BranchType::Local).map_err(|e| e.to_string())?;
+    if !force {
+        let info = get_branch_delete_info(repo, name)?;
+        if !info.merged {
+            return Err(format!("{name} is not fully merged — {} commit(s) would be lost.", info.commit_loss_count));
+        }
+    }
+    let upstream = branch.upstream().ok();
+    branch.delete().map_err(|e| e.to_string())?;
+    if also_delete_remote {
+        if let Some(up) = upstream {
+            if let Some(up_name) = up.name().ok().flatten() {
+                if let Some((remote_name, remote_branch)) = up_name.split_once('/') {
+                    delete_remote_branch(repo, remote_name, remote_branch)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Pushes a delete refspec (`:refs/heads/<branch>`) — the same mechanism `push_branch` uses for
+/// an ordinary push, just with an empty source side, which is git's own convention for "delete
+/// this ref on the remote".
+fn delete_remote_branch(repo: &Repository, remote_name: &str, remote_branch: &str) -> Result<(), String> {
+    let mut remote = repo.find_remote(remote_name).map_err(|e| e.to_string())?;
+    let mut rejected: Vec<String> = Vec::new();
+    {
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(credentials_callback(repo));
+        callbacks.push_update_reference(|refname, status| {
+            if let Some(msg) = status {
+                rejected.push(format!("{refname}: {msg}"));
+            }
+            Ok(())
+        });
+        let mut push_opts = git2::PushOptions::new();
+        push_opts.remote_callbacks(callbacks);
+        let refspec = format!(":refs/heads/{remote_branch}");
+        remote.push(&[refspec], Some(&mut push_opts)).map_err(|e| e.to_string())?;
+    }
+    if !rejected.is_empty() {
+        return Err(format!("Remote delete rejected: {}", rejected.join(", ")));
+    }
     Ok(())
 }
 
@@ -3147,6 +3425,171 @@ mod tests {
         assert_eq!(local_repo.state(), git2::RepositoryState::Clean);
         assert_eq!(std::fs::read_to_string(local_dir.join("a.txt")).unwrap(), "both-a\n");
         assert_eq!(std::fs::read_to_string(local_dir.join("b.txt")).unwrap(), "both-b\n");
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    // --- Branch CRUD (SPEC.md item 8, PRD §13) ----------------------------------------------
+
+    #[test]
+    fn checkout_branch_switches_head_on_a_clean_tree() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit(&repo, "first", &[]);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        repo.branch("feature", &c1_commit, false).unwrap();
+
+        checkout_branch(&repo, "feature", None, None).unwrap();
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn checkout_branch_requires_a_dirty_tree_strategy() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit(&repo, "first", &[]);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        repo.branch("feature", &c1_commit, false).unwrap();
+        std::fs::write(dir.join("untracked.txt"), "dirty\n").unwrap();
+
+        let result = checkout_branch(&repo, "feature", None, None);
+        assert!(result.is_err(), "a dirty tree with no chosen strategy should refuse rather than guess");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn checkout_branch_stashes_and_reapplies_dirty_changes() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "first", &[], "a.txt", "one\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        repo.branch("feature", &c1_commit, false).unwrap();
+        std::fs::write(dir.join("untracked.txt"), "dirty\n").unwrap();
+
+        checkout_branch(&repo, "feature", None, Some(DirtyTreeStrategy::Stash)).unwrap();
+
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("untracked.txt")).unwrap(),
+            "dirty\n",
+            "stashed change should be reapplied after the switch"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn get_branch_delete_info_reports_merged_branch_as_safe() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit(&repo, "first", &[]);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        repo.branch("feature", &c1_commit, false).unwrap();
+        // HEAD (main) and "feature" point at the same commit — feature is trivially merged.
+
+        let info = get_branch_delete_info(&repo, "feature").unwrap();
+        assert!(info.merged);
+        assert_eq!(info.commit_loss_count, 0);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn get_branch_delete_info_counts_unmerged_commits() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit(&repo, "first", &[]);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let feature_branch = repo.branch("feature", &c1_commit, false).unwrap();
+        let feature_tip = feature_branch.get().target().unwrap();
+        let feature_commit = repo.find_commit(feature_tip).unwrap();
+        // `commit()` writes through `HEAD`, so this needs `Some("refs/heads/feature")` explicitly
+        // — HEAD (main) must stay put for "feature" to end up with unique work main doesn't have.
+        let sig = repo.signature().unwrap();
+        let tree_oid = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("refs/heads/feature"), &sig, &sig, "feature work", &tree, &[&feature_commit])
+            .unwrap();
+
+        let info = get_branch_delete_info(&repo, "feature").unwrap();
+        assert!(!info.merged);
+        assert_eq!(info.commit_loss_count, 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_branch_updates_the_ref_name_only() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit(&repo, "first", &[]);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        repo.branch("old-name", &c1_commit, false).unwrap();
+
+        rename_branch(&repo, "old-name", "new-name").unwrap();
+
+        assert!(repo.find_branch("old-name", BranchType::Local).is_err());
+        assert!(repo.find_branch("new-name", BranchType::Local).is_ok());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn delete_branch_refuses_unmerged_without_force() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit(&repo, "first", &[]);
+        let c1_commit = repo.find_commit(c1).unwrap();
+        let feature_branch = repo.branch("feature", &c1_commit, false).unwrap();
+        let feature_tip = feature_branch.get().target().unwrap();
+        let feature_commit = repo.find_commit(feature_tip).unwrap();
+        // `commit()` writes through HEAD (main) — explicitly target "refs/heads/feature" instead
+        // so main stays put and "feature" ends up with unique unmerged work.
+        let sig = repo.signature().unwrap();
+        let tree_oid = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("refs/heads/feature"), &sig, &sig, "feature work", &tree, &[&feature_commit])
+            .unwrap();
+
+        let result = delete_branch(&repo, "feature", false, false);
+        assert!(result.is_err(), "deleting an unmerged branch without force should be refused");
+        assert!(repo.find_branch("feature", BranchType::Local).is_ok());
+
+        delete_branch(&repo, "feature", true, false).unwrap();
+        assert!(repo.find_branch("feature", BranchType::Local).is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn delete_branch_also_deletes_the_remote_branch() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+        let initial_commit = local_repo.find_commit(initial_oid).unwrap();
+        local_repo.branch("feature", &initial_commit, false).unwrap();
+        push_branch(&local_repo, |_| {}, "feature", "origin", "feature", true, false, false).unwrap();
+
+        delete_branch(&local_repo, "feature", true, true).unwrap();
+
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        assert!(
+            remote_repo.find_reference("refs/heads/feature").is_err(),
+            "remote feature branch should have been deleted too"
+        );
+
+        cleanup_pair(&remote_dir, &local_dir);
+    }
+
+    #[test]
+    fn list_branches_for_switch_lists_remote_only_branches_below_locals() {
+        let (remote_dir, local_dir, local_repo, initial_oid) = remote_and_clone_pair();
+        let remote_repo = Repository::open(&remote_dir).unwrap();
+        let initial_commit = remote_repo.find_commit(initial_oid).unwrap();
+        commit_blob(&remote_repo, "remote-only branch work", &[&initial_commit], "b.txt", "remote\n");
+        remote_repo.reference("refs/heads/other", initial_oid, false, "").unwrap();
+        fetch_remote(&local_repo, |_| {}, Some("origin"), false, false, false).unwrap();
+
+        let entries = list_branches_for_switch(&local_repo).unwrap();
+        let main = entries.iter().find(|e| e.name == "main").unwrap();
+        assert!(!main.is_remote_only);
+        let other = entries.iter().find(|e| e.name == "other").unwrap();
+        assert!(other.is_remote_only, "branch with no local counterpart should be listed as remote-only");
+        assert_eq!(other.remote_label.as_deref(), Some("origin/other"));
 
         cleanup_pair(&remote_dir, &local_dir);
     }

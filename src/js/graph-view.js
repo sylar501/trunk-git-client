@@ -8,6 +8,7 @@ import { openGraph, getGraphRows, getWorkingTreeStatus } from "./app.js";
 import { createCommitRow, laneColumnWidth } from "../components/commit-row.js";
 import { createCommitOverlay } from "../components/commit-overlay.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
+import { openSwitchBranchDialog } from "./switch-branch-dialog.js";
 import { openConflictableActionDialog } from "./conflictable-action-dialog.js";
 import { openPushDialog } from "./push-dialog.js";
 import { openFetchDialog } from "./fetch-dialog.js";
@@ -216,6 +217,31 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         goToStaging();
+      }
+    },
+    { signal }
+  );
+
+  // ⌘⇧B / ⌘B → Create/Switch branch (PRD §6/§13, SPEC.md item 8) — same fire-and-forget
+  // convention as the cherry-pick/revert/branch-from-here dialogs above: only `onCreated`/
+  // `onSwitched` resolves, never Cancel/Escape, and `onMutated` refreshes sidebar+graph together.
+  // ⌘⇧B is checked first since `e.key` for Shift+B is "B", which would otherwise also match a
+  // bare ⌘B check.
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "b") return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        openCreateBranchDialog({ repoPath })
+          .then(async (result) => {
+            if (!result?.created) return;
+            showToast({ variant: "success", message: "Branch created." });
+            await onMutated?.();
+          })
+          .catch((err) => showToast({ variant: "danger", message: String(err) }));
+      } else {
+        openSwitchBranchDialog({ repoPath, onMutated });
       }
     },
     { signal }

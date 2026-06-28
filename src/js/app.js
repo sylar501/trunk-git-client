@@ -91,8 +91,8 @@ export async function revertCommit(repoPath, sha, noCommit = false) {
   return invoke("revert_commit", { repoPath, sha, noCommit });
 }
 
-export async function createBranchAt(repoPath, sha, name) {
-  return invoke("create_branch_at", { repoPath, sha, name });
+export async function createBranchAt(repoPath, sha, name, checkout = true) {
+  return invoke("create_branch_at", { repoPath, sha, name, checkout });
 }
 
 export async function getConflictStatus(repoPath) {
@@ -215,4 +215,33 @@ export async function onFetchProgress(handler) {
 
 export async function pullBranch(repoPath, localBranch, remoteName, remoteBranch, strategy) {
   return invoke("pull_branch", { repoPath, localBranch, remoteName, remoteBranch, strategy });
+}
+
+// --- Branch dialogs (PRD §13, SPEC.md item 8) ---------------------------------------------
+
+export async function listBranchesForSwitch(repoPath) {
+  return invoke("list_branches_for_switch", { repoPath });
+}
+
+/** @param {{ remoteName?: string, remoteBranch?: string, dirtyStrategy?: "stash"|"carry" }} opts */
+export async function checkoutBranch(repoPath, name, { remoteName, remoteBranch, dirtyStrategy } = {}) {
+  return invoke("checkout_branch", {
+    repoPath,
+    name,
+    remoteName: remoteName ?? null,
+    remoteBranch: remoteBranch ?? null,
+    dirtyStrategy: dirtyStrategy ?? null,
+  });
+}
+
+export async function getBranchDeleteInfo(repoPath, name) {
+  return invoke("get_branch_delete_info", { repoPath, name });
+}
+
+export async function renameBranch(repoPath, oldName, newName) {
+  return invoke("rename_branch", { repoPath, oldName, newName });
+}
+
+export async function deleteBranch(repoPath, name, force, alsoDeleteRemote) {
+  return invoke("delete_branch", { repoPath, name, force, alsoDeleteRemote });
 }

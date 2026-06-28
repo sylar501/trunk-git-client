@@ -582,6 +582,54 @@ select.inp option {
   border-color: var(--amber);
 }
 
+/* ── Switch-branch dialog's searchable list (PRD §13.2, SPEC.md item 8) ──────────────── */
+
+.sb-branch-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sb-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.sb-branch-row:hover,
+.sb-branch-row.selected {
+  background: var(--bg-tertiary);
+}
+
+.sb-branch-name {
+  font-family: monospace;
+}
+
+.sb-branch-remote {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+}
+
+/* Plain text link (e.g. "Create new branch… ⌘⇧B") — no button chrome, just an interactive
+   coloured label, dashed-top-border-separated from whatever's above it. */
+.text-link {
+  color: var(--blue);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 6px 2px 0;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
 /* ── main graph view (PRD §7, SPEC.md item 3) ─────────────────────────
    Ported from docs/screenshot_1_main_graph.html's mockup CSS onto dark.css tokens.
    Only the graph toolbar/body/row/pill rules item 3 needs — the commit-detail overlay

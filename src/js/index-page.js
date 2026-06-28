@@ -94,6 +94,7 @@ async function refresh() {
     onAddExisting: handleAddExisting,
     onCloneNew: handleCloneNew,
     onSwitched: (fresh) => renderGraphArea(document.getElementById("graph-canvas"), fresh),
+    onBranchChanged: () => refresh(),
   });
   await renderGraphArea(document.getElementById("graph-canvas"), appState);
   return appState;

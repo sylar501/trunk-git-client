@@ -17,10 +17,18 @@ export function createSidebarItem({ dotColor, label, badgeText, active = false }
   return row;
 }
 
-export function createSidebarSection(label) {
+/** @param {string} label @param {{ actionLabel?: string, onAction?: (e: MouseEvent) => void }} [opts] */
+export function createSidebarSection(label, { actionLabel, onAction } = {}) {
   const sec = document.createElement("div");
   sec.className = "sb-sec";
-  sec.innerHTML = `<span></span>`;
+  sec.innerHTML = `<span></span>${actionLabel ? `<span class="sb-add">${actionLabel}</span>` : ""}`;
   sec.querySelector("span").textContent = label;
+  if (actionLabel && onAction) {
+    const actionEl = sec.querySelector(".sb-add");
+    actionEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onAction(e);
+    });
+  }
   return sec;
 }

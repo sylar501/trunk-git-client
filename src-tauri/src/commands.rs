@@ -482,10 +482,77 @@ pub async fn abort_conflict_resolution(
 }
 
 #[tauri::command]
-pub async fn create_branch_at(repo_path: String, sha: String, name: String) -> Result<(), String> {
+pub async fn create_branch_at(repo_path: String, sha: String, name: String, checkout: bool) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.create_branch_at(&sha, &name)
+        repo.create_branch_at(&sha, &name, checkout)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_branches_for_switch(repo_path: String) -> Result<Vec<git::SwitchBranchEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.list_branches_for_switch()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn checkout_branch(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    name: String,
+    remote_name: Option<String>,
+    remote_branch: Option<String>,
+    dirty_strategy: Option<git::DirtyTreeStrategy>,
+) -> Result<(), String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        let remote = match (&remote_name, &remote_branch) {
+            (Some(r), Some(b)) => Some((r.as_str(), b.as_str())),
+            _ => None,
+        };
+        repo.checkout_branch(&name, remote, dirty_strategy)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_branch_delete_info(repo_path: String, name: String) -> Result<git::BranchDeleteInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.get_branch_delete_info(&name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn rename_branch(repo_path: String, old_name: String, new_name: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.rename_branch(&old_name, &new_name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn delete_branch(
+    repo_path: String,
+    name: String,
+    force: bool,
+    also_delete_remote: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.delete_branch(&name, force, also_delete_remote)
     })
     .await
     .map_err(|e| e.to_string())?
