@@ -83,12 +83,12 @@ export async function getCommitFileDiff(repoPath, sha, filePath) {
   return invoke("get_commit_file_diff", { repoPath, sha, filePath });
 }
 
-export async function cherryPickCommit(repoPath, sha) {
-  return invoke("cherry_pick_commit", { repoPath, sha });
+export async function cherryPickCommit(repoPath, sha, noCommit = false) {
+  return invoke("cherry_pick_commit", { repoPath, sha, noCommit });
 }
 
-export async function revertCommit(repoPath, sha) {
-  return invoke("revert_commit", { repoPath, sha });
+export async function revertCommit(repoPath, sha, noCommit = false) {
+  return invoke("revert_commit", { repoPath, sha, noCommit });
 }
 
 export async function createBranchAt(repoPath, sha, name) {

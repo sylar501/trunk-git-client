@@ -381,12 +381,13 @@ pub async fn cherry_pick_commit(
     state: State<'_, Mutex<AppState>>,
     repo_path: String,
     sha: String,
+    no_commit: bool,
 ) -> Result<git::ConflictableOutcome, String> {
     guard_no_conflict_in_progress(&state, &repo_path)?;
     let path_for_open = repo_path.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.cherry_pick(&sha)
+        repo.cherry_pick(&sha, no_commit)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -401,12 +402,13 @@ pub async fn revert_commit(
     state: State<'_, Mutex<AppState>>,
     repo_path: String,
     sha: String,
+    no_commit: bool,
 ) -> Result<git::ConflictableOutcome, String> {
     guard_no_conflict_in_progress(&state, &repo_path)?;
     let path_for_open = repo_path.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.revert_commit(&sha)
+        repo.revert_commit(&sha, no_commit)
     })
     .await
     .map_err(|e| e.to_string())??;

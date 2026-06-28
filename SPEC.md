@@ -170,24 +170,37 @@ rather than inventing a per-panel variant:
   - Exit: "← history" button (Esc badge) or Escape; first Escape defocuses an active input,
     second exits to graph; transient toast confirms return.
 
-## 6. Merge + Conflict resolver — §4.6, §9
+## 6. [x] Merge + Conflict resolver — §4.6, §9 — Session 6
 
 - **Frontend**: full-screen conflict resolver view, file tabs, three-panel editor, merged-result panel
 - **Backend**: merge/rebase/cherry-pick conflict detection, per-hunk accept-ours/theirs/both,
   manual edit mode parsing, `git continue` / abort
 - **Dependencies**: Staging (5)
 - **Acceptance criteria**:
-  - Auto-entry on any conflicting operation; replaces graph canvas entirely.
+  - Entry points wired this session: cherry-pick and revert (the only operations with existing
+    UI — there's no merge-branch or rebase UI yet, items 7/12.3 and 10, both of which *depend on*
+    this item). Backend detection (`repo.state()`-derived) is operation-agnostic so merge/rebase
+    can plug into the same resolver later without rework.
+  - Auto-entry revised from this section's original "auto-entry on any conflicting operation":
+    clicking cherry-pick/revert now opens a confirm dialog first (commit details +
+    `--no-commit` option); a `Conflict` outcome opens a "resolve now or abort" choice dialog
+    instead of silently auto-navigating. Landing on or switching into an *already*-conflicted
+    repo never auto-enters the resolver either — the graph toolbar's "Stage changes" button is
+    replaced by an amber "Resolve conflicts" button instead (persistent, user-invoked), and
+    workspace-mode sidebar rows show an amber "conflict" badge. Once the resolver is actually
+    entered, it still replaces the graph canvas entirely as specified.
   - Amber banner: operation + conflict count + progress (N of M resolved). File tabs: red dot
     unresolved, green dot resolved.
   - Three-panel editor: ours (green tint) / base (gray, reference-only) / theirs (blue tint),
     synced scroll. Per-hunk controls on theirs panel: accept ours (green), accept theirs
     (blue), accept both (amber), edit manually (neutral). Resolved hunks show a green
     "✓ accepted" bar with an undo button.
-  - Merged result panel (pinned, bottom): preview mode read-only with live-updating
-    `<<<<<<<`/`>>>>>>>` markers for unresolved hunks; edit mode is an editable textarea with
-    an amber "edit mode active" banner; "Done editing" re-parses — file resolves if no markers
-    remain. Undoing a hunk after manual edits discards those edits.
+  - Merged result panel (pinned, bottom, resizable per SPEC.md's "Resizable panels" pattern):
+    preview mode read-only with live-updating `<<<<<<<`/`>>>>>>>` markers for unresolved hunks;
+    edit mode is an editable textarea with an amber "edit mode active" banner; "Done editing"
+    re-parses — file resolves if no markers remain. Undoing a hunk after manual edits discards
+    those edits (likewise, accepting a hunk via the per-hunk controls while manual edits were
+    active also discards them, not just undo).
   - Continue (blue) disabled until every file resolved. Escape/Abort cancels with no git
     operations applied and restores the working tree.
 

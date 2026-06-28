@@ -41,12 +41,12 @@ impl Repo {
         commit_file_diff(&self.inner, sha, file_path)
     }
 
-    pub fn cherry_pick(&self, sha: &str) -> Result<ConflictableOutcome, String> {
-        cherry_pick(&self.inner, sha)
+    pub fn cherry_pick(&self, sha: &str, no_commit: bool) -> Result<ConflictableOutcome, String> {
+        cherry_pick(&self.inner, sha, no_commit)
     }
 
-    pub fn revert_commit(&self, sha: &str) -> Result<ConflictableOutcome, String> {
-        revert_commit(&self.inner, sha)
+    pub fn revert_commit(&self, sha: &str, no_commit: bool) -> Result<ConflictableOutcome, String> {
+        revert_commit(&self.inner, sha, no_commit)
     }
 
     /// Cheap (no graph walk, just a handful of ref/file reads) — safe to call every time a repo
@@ -745,13 +745,20 @@ fn abort_in_progress_operation(repo: &Repository) -> Result<(), git2::Error> {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ConflictableOutcome {
     Completed { sha: String },
+    /// `no_commit: true` and the apply was clean — matches plain `git cherry-pick -n`/
+    /// `git revert -n`: the index/working tree carry the applied change, but deliberately no
+    /// commit is created and `CHERRY_PICK_HEAD`/`REVERT_HEAD` is left in place (not cleaned up)
+    /// so a subsequent manual commit still gets the right prefilled message, and `--abort`
+    /// still works, the same as real git leaves it.
+    AppliedNoCommit,
     Conflict,
 }
 
 /// Cherry-picks a single commit onto HEAD. Refuses merge commits outright (matching plain `git
 /// cherry-pick`'s own default refusal without `-m` — libgit2 hard-errors rather than defaulting
 /// to a mainline if one isn't specified) and refuses a dirty working tree (see
-/// `is_working_tree_clean`) before calling into libgit2 at all.
+/// `is_working_tree_clean`) before calling into libgit2 at all. `no_commit` mirrors `-n`/
+/// `--no-commit`: apply without creating a commit (see `ConflictableOutcome::AppliedNoCommit`).
 ///
 /// On conflicts, leaves the index/working tree exactly as `repo.cherrypick()` produced them
 /// (same as plain `git cherry-pick` would) instead of aborting — `conflict_style_diff3` on the
@@ -760,7 +767,7 @@ pub enum ConflictableOutcome {
 /// merge step itself used) makes libgit2 write `<<<<<<<`/`|||||||`/`=======`/`>>>>>>>` markers
 /// straight into the conflicting files, which the conflict resolver reads back via
 /// `get_conflict_file`.
-fn cherry_pick(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, String> {
+fn cherry_pick(repo: &Repository, sha: &str, no_commit: bool) -> Result<ConflictableOutcome, String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
     if commit.parent_count() > 1 {
@@ -785,6 +792,9 @@ fn cherry_pick(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, Stri
     if index.has_conflicts() {
         return Ok(ConflictableOutcome::Conflict);
     }
+    if no_commit {
+        return Ok(ConflictableOutcome::AppliedNoCommit);
+    }
 
     let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
     let tree = repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
@@ -800,8 +810,9 @@ fn cherry_pick(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, Stri
 
 /// Reverts a single commit on top of HEAD with a new commit (author = committer = current user,
 /// message matches plain `git revert`'s default format). Same merge-commit and dirty-tree
-/// upfront refusals, and the same conflict-handoff shape, as `cherry_pick` above.
-fn revert_commit(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, String> {
+/// upfront refusals, the same conflict-handoff shape, and the same `no_commit` (`-n`) meaning,
+/// as `cherry_pick` above.
+fn revert_commit(repo: &Repository, sha: &str, no_commit: bool) -> Result<ConflictableOutcome, String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
     if commit.parent_count() > 1 {
@@ -825,6 +836,9 @@ fn revert_commit(repo: &Repository, sha: &str) -> Result<ConflictableOutcome, St
     let mut index = repo.index().map_err(|e| e.to_string())?;
     if index.has_conflicts() {
         return Ok(ConflictableOutcome::Conflict);
+    }
+    if no_commit {
+        return Ok(ConflictableOutcome::AppliedNoCommit);
     }
 
     let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
@@ -1874,8 +1888,8 @@ mod tests {
         let merge_oid = commit(&repo, "merge feature", &[&main_tip_commit, &feature_tip_commit]);
         let merge_sha = merge_oid.to_string();
 
-        assert!(cherry_pick(&repo, &merge_sha).is_err(), "cherry-pick must refuse a merge commit");
-        assert!(revert_commit(&repo, &merge_sha).is_err(), "revert must refuse a merge commit");
+        assert!(cherry_pick(&repo, &merge_sha, false).is_err(), "cherry-pick must refuse a merge commit");
+        assert!(revert_commit(&repo, &merge_sha, false).is_err(), "revert must refuse a merge commit");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2166,10 +2180,53 @@ mod tests {
     }
 
     #[test]
+    fn cherry_pick_no_commit_applies_to_index_without_creating_a_commit() {
+        let (dir, repo) = temp_repo();
+        let base = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\n");
+        let base_commit = repo.find_commit(base).unwrap();
+
+        // A non-conflicting commit on a separate branch — adds a new file, nothing overlapping
+        // with `a.txt`, so this cherry-pick always applies cleanly.
+        std::fs::write(dir.join("b.txt"), "new file\n").unwrap();
+        let feature_oid = {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("b.txt")).unwrap();
+            index.write().unwrap();
+            let tree_oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            let sig = repo.signature().unwrap();
+            repo.commit(Some("refs/heads/feature"), &sig, &sig, "add b", &tree, &[&base_commit])
+                .unwrap()
+        };
+        // The index/workdir still carry `b.txt` from building the feature commit above (it was
+        // never committed to HEAD's own branch) — reset back to a clean tree matching HEAD so
+        // `cherry_pick`'s dirty-tree precheck doesn't reject the call below.
+        repo.reset(base_commit.as_object(), git2::ResetType::Hard, None).unwrap();
+
+        let head_before = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let outcome = cherry_pick(&repo, &feature_oid.to_string(), true).unwrap();
+        assert!(matches!(outcome, ConflictableOutcome::AppliedNoCommit));
+
+        let head_after = repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert_eq!(head_before, head_after, "no-commit cherry-pick must not move HEAD");
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "new file\n");
+
+        let status = working_tree_status(&repo).unwrap();
+        let b = status.files.iter().find(|f| f.path == "b.txt").unwrap();
+        assert!(b.staged, "no-commit cherry-pick should leave the change staged");
+
+        // CHERRY_PICK_HEAD left in place (state not cleaned up) — same as plain
+        // `git cherry-pick -n`, so a later manual commit or `--abort` still works.
+        assert_eq!(repo.state(), git2::RepositoryState::CherryPick);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn cherry_pick_conflict_is_reported_not_aborted() {
         let (dir, repo, _main_tip, feature_oid) = setup_conflicting_branches();
 
-        let outcome = cherry_pick(&repo, &feature_oid.to_string()).unwrap();
+        let outcome = cherry_pick(&repo, &feature_oid.to_string(), false).unwrap();
         assert!(matches!(outcome, ConflictableOutcome::Conflict));
         assert!(repo.index().unwrap().has_conflicts(), "conflict must be left in place, not aborted");
         assert_eq!(repo.state(), git2::RepositoryState::CherryPick);
@@ -2196,7 +2253,7 @@ mod tests {
     #[test]
     fn finish_conflict_resolution_commits_resolved_content_and_clears_state() {
         let (dir, repo, _main_tip, feature_oid) = setup_conflicting_branches();
-        cherry_pick(&repo, &feature_oid.to_string()).unwrap();
+        cherry_pick(&repo, &feature_oid.to_string(), false).unwrap();
 
         let resolved = vec![ResolvedFile { path: "a.txt".to_string(), content: "one\nFEATURE\nthree\n".to_string() }];
         let new_sha = finish_conflict_resolution(&repo, resolved).unwrap();
@@ -2214,7 +2271,7 @@ mod tests {
     #[test]
     fn abort_conflict_resolution_restores_pre_cherry_pick_tree() {
         let (dir, repo, main_tip, feature_oid) = setup_conflicting_branches();
-        cherry_pick(&repo, &feature_oid.to_string()).unwrap();
+        cherry_pick(&repo, &feature_oid.to_string(), false).unwrap();
 
         abort_in_progress_operation(&repo).unwrap();
 

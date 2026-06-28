@@ -4,10 +4,11 @@
 // wiring and its cherry-pick/revert/branch-from-here actions. Deliberately does NOT wire the
 // "rebase" toolbar button (that's item 10) — still visual-only here.
 
-import { openGraph, getGraphRows, cherryPickCommit, revertCommit, getWorkingTreeStatus } from "./app.js";
+import { openGraph, getGraphRows, getWorkingTreeStatus } from "./app.js";
 import { createCommitRow, laneColumnWidth } from "../components/commit-row.js";
 import { createCommitOverlay } from "../components/commit-overlay.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
+import { openConflictableActionDialog } from "./conflictable-action-dialog.js";
 import { showToast } from "../components/toast.js";
 import { attachResizeHandle } from "../components/resize-handle.js";
 
@@ -37,9 +38,10 @@ function debounce(fn, ms) {
  *   conflicted?: boolean - this repo has an unresolved conflict (PRD §4.6/§9, SPEC.md item 6),
  *     i.e. `appState.conflict_resolution_in_progress` for the active repo. Swaps the toolbar's
  *     "Stage changes" button for "Resolve conflicts" — staging doesn't make sense with unmerged
- *     paths in the index, and there's no auto-redirect into the resolver on landing here (only
- *     the cherry-pick/revert action that *produces* a conflict auto-enters it, see `onCherryPick`/
- *     `onRevert` below) — this button is the deliberate, user-invoked way back in otherwise.
+ *     paths in the index. There's no auto-redirect into the resolver anywhere, including right
+ *     after the cherry-pick/revert action that produces a fresh conflict — see
+ *     `conflictable-action-dialog.js`'s conflict-choice dialog, which lets the user pick
+ *     resolve-now vs abort instead. This button is the persistent, user-invoked way back in.
  * }} opts - `onMutated` is called after a successful cherry-pick/revert/branch-from-here so the
  *   caller can refresh sidebar+graph together (see `index-page.js`) — one shared refresh path
  *   for all three, rather than this module guessing which mutation needs which slice of a
@@ -90,35 +92,18 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
   // Commit detail overlay (PRD §4.3, SPEC.md item 4) — a sibling of `sizer`, not a child of it,
   // so it pins to `body`'s visible viewport instead of scrolling away with the recycled row
   // pool (see commit-overlay.js's own header comment for the full reasoning).
-  // A `Conflict` outcome (PRD §4.6/§9, SPEC.md item 6) isn't an error — it's a handoff to the
-  // full-screen conflict resolver, which replaces this view entirely (same hard-page-load
-  // pattern `staging.html` uses), so there's nothing left here to refresh.
+  //
+  // Both actions open a confirm dialog (commit details + a "--no-commit" option) rather than
+  // running immediately, and a `conflict` outcome opens a second "resolve now or abort" choice
+  // instead of silently auto-navigating into the resolver — see
+  // `conflictable-action-dialog.js`. Fire-and-forget, same convention as `onBranchFromHere`
+  // below: the dialog only resolves once something actually happened, never on Cancel.
   async function onCherryPick({ sha }) {
-    try {
-      const outcome = await cherryPickCommit(repoPath, sha);
-      if (outcome.status === "conflict") {
-        window.location.href = "resolve.html";
-        return;
-      }
-      showToast({ variant: "success", message: "Commit cherry-picked." });
-      await onMutated?.();
-    } catch (err) {
-      showToast({ variant: "danger", message: String(err) });
-    }
+    openConflictableActionDialog({ kind: "cherry-pick", repoPath, sha, onMutated });
   }
 
   async function onRevert({ sha }) {
-    try {
-      const outcome = await revertCommit(repoPath, sha);
-      if (outcome.status === "conflict") {
-        window.location.href = "resolve.html";
-        return;
-      }
-      showToast({ variant: "success", message: "Commit reverted." });
-      await onMutated?.();
-    } catch (err) {
-      showToast({ variant: "danger", message: String(err) });
-    }
+    openConflictableActionDialog({ kind: "revert", repoPath, sha, onMutated });
   }
 
   // Deliberately not `await`ed below the dialog-open call: `openCreateBranchDialog` only
