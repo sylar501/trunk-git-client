@@ -1317,9 +1317,23 @@ fn checkout_branch(
         .ok_or_else(|| "Branch has an invalid reference name.".to_string())?
         .to_string();
 
+    // libgit2's default (non-forced) `GIT_CHECKOUT_SAFE` strategy decides per-path, from stat
+    // info, whether a file "would be overwritten" — and that judgment can be wrong, leaving a
+    // file's on-disk content stale (not matching the tree it just checked out into the index)
+    // even though nothing was actually at risk. That's only an acceptable trade-off for the
+    // "carry over" dirty-tree strategy, which deliberately wants this safety net so it fails
+    // loudly instead of clobbering real uncommitted changes (§13.2's "may fail on conflict").
+    // Every other case here has nothing left to protect — a clean tree, or a tree just emptied
+    // by `stash_save2` above — so force it to guarantee the working directory actually ends up
+    // matching the target tree.
+    let force_checkout = !dirty || matches!(dirty_strategy, Some(DirtyTreeStrategy::Stash));
     let checkout_result = (|| {
         repo.set_head(&refname).map_err(|e| e.to_string())?;
-        repo.checkout_head(None).map_err(|e| e.to_string())
+        let mut builder = git2::build::CheckoutBuilder::new();
+        if force_checkout {
+            builder.force();
+        }
+        repo.checkout_head(Some(&mut builder)).map_err(|e| e.to_string())
     })();
 
     if stash_sig.is_some() {
@@ -3440,6 +3454,39 @@ mod tests {
 
         checkout_branch(&repo, "feature", None, None).unwrap();
         assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Regression test for a real bug: `checkout_head(None)` (libgit2's non-forced
+    // `GIT_CHECKOUT_SAFE` default) can leave a working-directory file's on-disk content stale
+    // — not matching the tree it just checked out into the index — even on a verified-clean
+    // tree with nothing at risk. That showed up as the "Stage changes" toolbar button reporting
+    // phantom changes immediately after switching branches in the UI, even though a real `git
+    // switch` of the same move showed nothing. This test creates a branch at an *older* commit
+    // (different file content from HEAD) and switches to it, then asserts both the on-disk file
+    // content and `working_tree_status` end up clean — not just that HEAD moved.
+    #[test]
+    fn checkout_branch_rewrites_workdir_content_when_switching_to_an_older_commit() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "first", &[], "a.txt", "older content\n");
+        let c1_commit = repo.find_commit(c1).unwrap();
+        repo.branch("feature", &c1_commit, false).unwrap();
+        commit_with_file(&repo, &dir, "second", &[&c1_commit], "a.txt", "newer content\n");
+        // HEAD (main) is now at "second"; "feature" still points at "first" with different
+        // content for the same file — exactly the shape of "branch from here at an earlier
+        // commit, then switch to it" that exposed the bug.
+
+        checkout_branch(&repo, "feature", None, None).unwrap();
+
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "older content\n",
+            "working directory should actually contain the checked-out branch's content"
+        );
+        let status = working_tree_status(&repo).unwrap();
+        assert!(status.files.is_empty(), "tree should be clean immediately after switching, found: {:?}", status.files);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
