@@ -10,7 +10,7 @@ import { runWithInlineSuccess, confirmDirtyTreeStrategy } from "./branch-dialog-
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
 
 /**
- * Resolves with `{ switched: true }` on success; never resolves on cancel.
+ * Resolves with `{ switched: true, name }` on success; never resolves on cancel.
  * @param {{ repoPath: string, onMutated?: () => Promise<void>|void }} opts
  */
 export function openSwitchBranchDialog({ repoPath, onMutated }) {
@@ -150,7 +150,7 @@ export function openSwitchBranchDialog({ repoPath, onMutated }) {
           successMessage: `Switched to ${name}.`,
           onMutated: async () => {
             await onMutated?.();
-            resolve({ switched: true });
+            resolve({ switched: true, name });
           },
           onError: (err) => {
             render();

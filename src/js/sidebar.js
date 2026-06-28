@@ -86,6 +86,7 @@ async function switchToBranchFromSidebar(repoPath, name, dotEl, onBranchChanged)
     }
     await checkoutBranch(repoPath, name, { dirtyStrategy });
     await onBranchChanged?.();
+    showToast({ variant: "success", message: `Switched to ${name}.` });
     return true;
   } catch (err) {
     showToast({ variant: "danger", message: String(err) });
@@ -104,7 +105,10 @@ async function appendBranchesSection(container, repoPath, handlers = {}) {
     createSidebarSection("Branches", {
       actionLabel: "⇄",
       onAction: () => {
-        openSwitchBranchDialog({ repoPath, onMutated: handlers.onBranchChanged });
+        openSwitchBranchDialog({ repoPath, onMutated: handlers.onBranchChanged }).then((result) => {
+          if (!result?.switched) return;
+          showToast({ variant: "success", message: `Switched to ${result.name}.` });
+        });
       },
     })
   );

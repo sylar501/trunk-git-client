@@ -241,7 +241,10 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
           })
           .catch((err) => showToast({ variant: "danger", message: String(err) }));
       } else {
-        openSwitchBranchDialog({ repoPath, onMutated });
+        openSwitchBranchDialog({ repoPath, onMutated }).then((result) => {
+          if (!result?.switched) return;
+          showToast({ variant: "success", message: `Switched to ${result.name}.` });
+        });
       }
     },
     { signal }
