@@ -70,8 +70,17 @@ function openBackToWelcomeMenu(e) {
 /// just runs the dirty-tree check + `checkoutBranch` inline, mirroring the Repositories section's
 /// own row-click pattern just above (spinner swapped in immediately, single in-flight switch at
 /// a time).
-async function switchToBranchFromSidebar(repoPath, name, dotEl, onBranchChanged) {
+///
+/// Takes `row` (not the `.sb-dot` element directly) and restores it on every non-success path
+/// (Cancel from the dirty-tree confirm, or a thrown error) — on success `onBranchChanged` triggers
+/// a full sidebar re-render so there's nothing to restore, but Cancel/error leave this same row
+/// in place, and a stale `.sb-dot` reference (already swapped for a spinner by an earlier,
+/// cancelled attempt) would otherwise make the next click silently do nothing forever.
+async function switchToBranchFromSidebar(repoPath, name, row, onBranchChanged) {
+  const dotEl = row.querySelector(".sb-dot");
+  const originalDotHtml = dotEl.outerHTML;
   dotEl.outerHTML = `<div class="spinner"></div>`;
+  let succeeded = false;
   try {
     let dirty = false;
     try {
@@ -87,10 +96,16 @@ async function switchToBranchFromSidebar(repoPath, name, dotEl, onBranchChanged)
     await checkoutBranch(repoPath, name, { dirtyStrategy });
     await onBranchChanged?.();
     showToast({ variant: "success", message: `Switched to ${name}.` });
+    succeeded = true;
     return true;
   } catch (err) {
     showToast({ variant: "danger", message: String(err) });
     return false;
+  } finally {
+    if (!succeeded) {
+      const spinnerEl = row.querySelector(".spinner");
+      if (spinnerEl) spinnerEl.outerHTML = originalDotHtml;
+    }
   }
 }
 
@@ -144,7 +159,7 @@ async function appendBranchesSection(container, repoPath, handlers = {}) {
       row.addEventListener("click", async () => {
         if (switching) return;
         switching = true;
-        const ok = await switchToBranchFromSidebar(repoPath, branch.name, row.querySelector(".sb-dot"), handlers.onBranchChanged);
+        const ok = await switchToBranchFromSidebar(repoPath, branch.name, row, handlers.onBranchChanged);
         if (!ok) switching = false;
       });
     }
