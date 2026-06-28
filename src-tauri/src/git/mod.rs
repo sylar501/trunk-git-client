@@ -1164,9 +1164,16 @@ fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Re
 
 /// Creates a branch at `sha`, optionally checking it out (SPEC.md item 8's "Checkout after
 /// creating" checkbox, default on). `repo.branch(..., force: false)` surfaces git2's natural
-/// duplicate-name error rather than silently overwriting; `checkout_head(None)` uses libgit2's
-/// default *non-forced* safety checks, so a conflicting dirty working tree fails loudly instead
-/// of being clobbered.
+/// duplicate-name error rather than silently overwriting.
+///
+/// The starting point can be any commit (the graph context menu's "branch from here" passes
+/// whichever row was clicked, not just HEAD's own commit) — so this checkout is exactly the
+/// same "move across two potentially very different trees" case `checkout_branch` has, with the
+/// same fix: force when the tree is clean (nothing at risk, and libgit2's non-forced
+/// `GIT_CHECKOUT_SAFE` default can otherwise leave on-disk file content stale relative to the
+/// tree it just checked out into the index — see `checkout_branch`'s comment for the full
+/// writeup). A dirty tree still gets the non-forced safety check, so it fails loudly instead of
+/// being clobbered.
 fn create_branch_at(repo: &Repository, sha: &str, name: &str, checkout: bool) -> Result<(), String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
@@ -1179,8 +1186,17 @@ fn create_branch_at(repo: &Repository, sha: &str, name: &str, checkout: bool) ->
         .name()
         .ok_or_else(|| "Created branch has an invalid reference name.".to_string())?
         .to_string();
+    // Must be checked *before* `set_head` — moving HEAD alone (before any checkout) already
+    // changes what the index is compared against, so checking after would compare the new
+    // branch's tree against the still-unchanged old index and spuriously report "dirty" even on
+    // a tree with nothing actually uncommitted.
+    let clean = is_working_tree_clean(repo).map_err(|e| e.to_string())?;
     repo.set_head(&refname).map_err(|e| e.to_string())?;
-    repo.checkout_head(None).map_err(|e| e.to_string())?;
+    let mut builder = git2::build::CheckoutBuilder::new();
+    if clean {
+        builder.force();
+    }
+    repo.checkout_head(Some(&mut builder)).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -3487,6 +3503,33 @@ mod tests {
         );
         let status = working_tree_status(&repo).unwrap();
         assert!(status.files.is_empty(), "tree should be clean immediately after switching, found: {:?}", status.files);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Same regression as `checkout_branch_rewrites_workdir_content_when_switching_to_an_older_commit`,
+    // but for the "branch from here" path (graph context menu / SPEC.md item 8's Create-branch
+    // dialog with "Checkout after creating" on): creating a branch *at an older commit* than
+    // HEAD and checking it out immediately must actually rewrite the working directory, not just
+    // move HEAD.
+    #[test]
+    fn create_branch_at_rewrites_workdir_content_when_starting_point_is_an_older_commit() {
+        let (dir, repo) = temp_repo();
+        let c1 = commit_with_file(&repo, &dir, "first", &[], "a.txt", "older content\n");
+        commit_with_file(&repo, &dir, "second", &[&repo.find_commit(c1).unwrap()], "a.txt", "newer content\n");
+        // HEAD (main) is now at "second" with "newer content"; "feature" is about to be created
+        // at "first" ("older content") and checked out immediately.
+
+        create_branch_at(&repo, &c1.to_string(), "feature", true).unwrap();
+
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "older content\n",
+            "working directory should actually contain the new branch's starting-point content"
+        );
+        let status = working_tree_status(&repo).unwrap();
+        assert!(status.files.is_empty(), "tree should be clean immediately after creating+checking out, found: {:?}", status.files);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
