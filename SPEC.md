@@ -265,28 +265,45 @@ rather than inventing a per-panel variant:
     cherry-pick elsewhere in the app) — the dialog only stays open on failure, to show the error
     inline with enough context to fix and retry.
 
-## 9. Command palette — §10
+## 9. [x] Command palette — §10 — Session 9
 
 - **Frontend**: `src/components/command-palette.js` (global overlay, UI only), `src/js/
   command-registry.js` (builds the command list + dynamic groups for a context, mounts ⌘K +
-  the §6 shortcut map into a host page)
-- **Backend**: in-memory command/branch/file/commit/author index (rebuilt on repo/workspace switch)
+  the §6 shortcut map into a host page), `src/js/workspace-prompt.js` (name+directory prompt
+  shared with `welcome.js`, pulled out to a side-effect-free module — see the note below)
+- **Backend**: in-memory command/branch/commit index (rebuilt on repo/workspace switch); new
+  `get_commit_index` command so a commit result can jump the already-mounted graph to the
+  right row instead of reloading
 - **Dependencies**: Main graph view (3), Branch dialogs (8) for command inventory entries
 - **Acceptance criteria**:
   - ⌘K/Ctrl+K opens instantly from anywhere; app behind dimmed but visible; Escape/⌘K
     again/click-outside closes and restores prior focus.
-  - Single search field spans commands, branches (floated top), recently changed files, commits
-    (SHA/message), authors. 5 scope tabs (All/Git/Navigate/View/Repos), Tab cycles them.
+  - Single search field spans commands, branches, and commits (SHA/message). **Revised from
+    this section's original wording**: file and author search are both dropped (see SPEC.md's
+    "Future ideas #1"/"#2" — neither has anywhere real to land yet: no contributor view for an
+    author result, and `getWorkingTreeStatus` can only ever cover uncommitted files, too narrow
+    to honestly call "file search"). 4 scope tabs, **also revised** from the literal
+    All/Git/Navigate/View/Repos list to **All/Commands/Branches/Commits** — a result-*type*
+    split instead of a command-*category* split, since branches and commits had both been
+    landing in "Git" alongside the git commands themselves, indistinguishable by tab. Tab
+    cycles them.
   - Result rows: colour-coded icon chip (§5 system), highlighted matching substring, description
-    line, right-aligned shortcut.
-  - ↑↓ select, Enter run+close, ⌘Enter run+keep-open, Tab cycle tabs, Escape close.
+    line, right-aligned shortcut. Commit rows show a relative timestamp ("3 hours ago").
+  - ↑↓ select (skipping disabled rows), Enter run+close, ⌘Enter run+keep-open, Tab cycle tabs,
+    Escape close. Selected row auto-scrolls into view.
   - Performance: open <50ms, results <16ms per keystroke — index only, never touches
-    filesystem/git per keystroke. **One documented exception**: commit/author search has no
-    backend index to query (none exists anywhere in this codebase yet — the graph's own filter
-    bar queries git per keystroke too, debounced) and goes through the same debounced
-    `getGraphRows` call instead, via `command-palette.js`'s `fetchDynamic` hook. Branches and
-    recently-changed files stay index-only (one `listBranches`/`getWorkingTreeStatus` call at
-    open-time, filtered in memory per keystroke).
+    filesystem/git per keystroke. **One documented exception**: commit search has no backend
+    index to query (none exists anywhere in this codebase yet — the graph's own filter bar
+    queries git per keystroke too, debounced) and goes through the same debounced
+    `getGraphRows` call instead, via `command-palette.js`'s `fetchDynamic` hook — scanning a
+    2000-row window and filtering to actual matches (`get_graph_rows` returns a position
+    window with a per-row `matches` flag for graph dimming, §7.3 — not a pre-filtered list).
+    Branches stay index-only (one `listBranches` call at open-time, filtered in memory per
+    keystroke).
+  - Selecting a commit result jumps the graph straight to it (scroll + open the detail overlay)
+    on `index.html`; on `staging.html`/`resolve.html`, where there's no graph mounted to jump
+    within, it hands the target off via `sessionStorage` and navigates, and `index-page.js`
+    consumes it right after the graph mounts.
   - Command inventory per §10.6, with three deliberate omissions from this section's literal
     wording: rename/delete branch (item 8's sidebar-context-menu-only override stands), cherry-
     pick/revert (need a specific target commit a text-search palette can't supply — stay on the
@@ -299,11 +316,14 @@ rather than inventing a per-panel variant:
   - Mounted on `index.html`, `staging.html`, `resolve.html` only — not `welcome.html` or
     `preferences.html` (no repo/workspace context yet on the former, no controller script at
     all yet on the latter; same precedent as item 1's `FAST_PATH_ENABLED` gating).
-  - Closes out item 2's deferral: "Promote to workspace…" is implemented for real here (Repos
-    scope, Repository mode only) via a new `promote_to_workspace` backend command that flips
-    the live `AppState` from Repository to Workspace mode in place, no restart required —
-    reuses `welcome.js`'s `promptWorkspaceDetails` prompt (now exported) rather than a second
-    name+directory dialog.
+  - Closes out item 2's deferral: "Promote to workspace…" is implemented for real here
+    (Repository mode only) via a new `promote_to_workspace` backend command that flips the
+    live `AppState` from Repository to Workspace mode in place, no restart required — reuses
+    the name+directory prompt originally in `welcome.js`, pulled out into its own
+    `src/js/workspace-prompt.js` rather than exported from `welcome.js` directly (importing a
+    page-controller module for one helper runs that module's own top-level page-bootstrap code
+    as a side effect — this caused a real reload loop on `index.html`/`staging.html`/
+    `resolve.html` once `command-registry.js` imported it before the fix).
 
 ## 10. Interactive rebase — §16
 

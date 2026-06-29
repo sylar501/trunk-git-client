@@ -4,8 +4,14 @@
 // mirrors `dialog.js`'s `openDialog` pattern rather than re-deriving it.
 
 const ICON_VARIANTS = { blue: "ic-b", green: "ic-g", red: "ic-r", amber: "ic-a", purple: "ic-p", neutral: "ic-n" };
-const SCOPES = ["all", "git", "navigate", "view", "repos"];
-const SCOPE_LABELS = { all: "All", git: "Git", navigate: "Navigate", view: "View", repos: "Repos" };
+// Tabs by *result type* (what you're searching for), not by command category — the
+// placeholder text ("Type a command, branch, or commit…") names exactly these three, and a
+// result-type split is what actually disambiguates "git" results, which used to lump branch
+// switches, commit search hits, and the git commands themselves into one indistinguishable
+// scope. See SPEC.md item 9's revision note for why this departs from §10.2's literal
+// All/Git/Navigate/View/Repos tab list.
+const SCOPES = ["all", "commands", "branches", "commits"];
+const SCOPE_LABELS = { all: "All", commands: "Commands", branches: "Branches", commits: "Commits" };
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -31,23 +37,29 @@ function matchesQuery(command, query) {
 /**
  * @param {Array<{id, label, description?, scope, iconVariant?, icon?, shortcutLabel?,
  *   disabled?, run: () => void}>} commands - the full inventory for the current context;
- *   already includes any dynamic branch/file/commit/author rows (PRD §10.2) flattened in by
+ *   already includes any dynamic branch/commit rows (PRD §10.2) flattened in by
  *   the caller — this module just filters/renders/runs.
  * @param {{
  *   onClose?: () => void - fires exactly once, whether dismissal came from inside
  *     (Escape/outside-click/running a command) or from the caller's own `close()` (used when
  *     ⌘K is pressed again while already open — see `command-registry.js`'s
  *     `mountCommandPalette`).
- *   fetchDynamic?: (query: string) => Promise<Array<object>> - query-dependent rows (commit/
- *     author search, §10.2) the caller can't supply up front since they depend on what's
- *     typed. Debounced 150ms (matches `graph-view.js`'s own filter bar) and merged into the
- *     static `commands` for filtering/rendering once resolved — a deliberate, documented
- *     exception to §10.5's "index-only" requirement for this one result category; see
- *     SPEC.md item 9's note.
+ *   fetchDynamic?: (query: string) => Promise<Array<object>> - query-dependent rows (commit
+ *     search, §10.2) the caller can't supply up front since they depend on what's typed.
+ *     Debounced 150ms (matches `graph-view.js`'s own filter bar) and merged into the static
+ *     `commands` for filtering/rendering once resolved — a deliberate, documented exception
+ *     to §10.5's "index-only" requirement for this one result category; see SPEC.md item 9's
+ *     note.
+ *   dynamicMinQueryLength?: number - `fetchDynamic` isn't called below this length (default
+ *     0, i.e. always called once there's any query at all) — short queries against a search
+ *     that scans real history are mostly noise, not worth the round trip.
+ *   dynamicHint?: string - shown instead of the generic "No matching results." when the query
+ *     is too short to have triggered `fetchDynamic` yet and nothing else matched either (e.g.
+ *     "Type at least 3 characters to search commits.").
  * }} opts
  * @returns {{ close: () => void }}
  */
-export function openCommandPalette(commands, { onClose, fetchDynamic } = {}) {
+export function openCommandPalette(commands, { onClose, fetchDynamic, dynamicMinQueryLength = 0, dynamicHint } = {}) {
   const previouslyFocused = document.activeElement;
 
   const overlay = document.createElement("div");
@@ -100,7 +112,7 @@ export function openCommandPalette(commands, { onClose, fetchDynamic } = {}) {
 
   function scheduleDynamicFetch(query) {
     clearTimeout(debounceHandle);
-    if (!fetchDynamic || !query) {
+    if (!fetchDynamic || query.length < dynamicMinQueryLength) {
       dynamicExtra = [];
       return;
     }
@@ -144,7 +156,9 @@ export function openCommandPalette(commands, { onClose, fetchDynamic } = {}) {
               </div>`
           )
           .join("")
-      : `<div class="cmdp-empty">No matching results.</div>`;
+      : `<div class="cmdp-empty">${
+          dynamicHint && query.length < dynamicMinQueryLength ? escapeHtml(dynamicHint) : "No matching results."
+        }</div>`;
     resultsEl.querySelector(".cmdp-row.selected")?.scrollIntoView({ block: "nearest" });
   }
 

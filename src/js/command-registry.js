@@ -39,6 +39,7 @@ const SHA_PREFIX_RE = /^[0-9a-f]{4,40}$/i;
 // coincidental position hits rather than real text matches.
 const COMMIT_SEARCH_SCAN_DEPTH = 2000;
 const COMMIT_SEARCH_MAX_RESULTS = 20;
+const COMMIT_SEARCH_MIN_QUERY_LENGTH = 3;
 
 const RELATIVE_TIME_UNITS = [
   ["year", 31536000],
@@ -97,7 +98,9 @@ async function switchToBranch(repoPath, name, onMutated) {
  *   goToStaging: () => void,
  *   goToHistory: () => void,
  * }} ctx
- * @returns {Array<object>} static commands, in §10.6's grouping order
+ * @returns {Array<object>} static commands (all scoped "commands" — see `command-palette.js`'s
+ *   header comment for why scope is by result type, not §10.6's command category), grouped
+ *   by §10.6's original Git/Navigate/View/Repos categories purely for readability below
  */
 function staticCommands(ctx) {
   const { repoPath, appState, onMutated, onAddExisting, onCloneNew, goToStaging, goToHistory } = ctx;
@@ -109,7 +112,7 @@ function staticCommands(ctx) {
     // --- Git ---
     {
       id: "create-branch",
-      scope: "git",
+      scope: "commands",
       iconVariant: "green",
       icon: "+",
       label: "Create branch…",
@@ -122,7 +125,7 @@ function staticCommands(ctx) {
     },
     {
       id: "switch-branch",
-      scope: "git",
+      scope: "commands",
       iconVariant: "blue",
       icon: "⌥",
       label: "Switch branch…",
@@ -136,14 +139,14 @@ function staticCommands(ctx) {
     },
     {
       id: "merge-branch",
-      scope: "git",
+      scope: "commands",
       iconVariant: "neutral",
       icon: "⇄",
       ...comingLater("Merge branch…"),
     },
     {
       id: "push",
-      scope: "git",
+      scope: "commands",
       iconVariant: "blue",
       icon: "↑",
       label: "Push",
@@ -153,7 +156,7 @@ function staticCommands(ctx) {
     },
     {
       id: "fetch",
-      scope: "git",
+      scope: "commands",
       iconVariant: "neutral",
       icon: "↓",
       label: "Fetch",
@@ -163,7 +166,7 @@ function staticCommands(ctx) {
     },
     {
       id: "pull",
-      scope: "git",
+      scope: "commands",
       iconVariant: "amber",
       icon: "⇄",
       label: "Pull",
@@ -171,15 +174,15 @@ function staticCommands(ctx) {
       shortcutLabel: "⌘⇧P",
       run: () => openPullDialog({ repoPath, onMutated }),
     },
-    { id: "rebase", scope: "git", iconVariant: "purple", icon: "↕", ...comingLater("Interactive rebase…") },
-    { id: "stash", scope: "git", iconVariant: "amber", icon: "▤", ...comingLater("Stash changes…") },
-    { id: "pop-stash", scope: "git", iconVariant: "green", icon: "▤", ...comingLater("Pop stash") },
-    { id: "create-tag", scope: "git", iconVariant: "purple", icon: "◆", ...comingLater("Create tag…") },
+    { id: "rebase", scope: "commands", iconVariant: "purple", icon: "↕", ...comingLater("Interactive rebase…") },
+    { id: "stash", scope: "commands", iconVariant: "amber", icon: "▤", ...comingLater("Stash changes…") },
+    { id: "pop-stash", scope: "commands", iconVariant: "green", icon: "▤", ...comingLater("Pop stash") },
+    { id: "create-tag", scope: "commands", iconVariant: "purple", icon: "◆", ...comingLater("Create tag…") },
 
     // --- Navigate ---
     {
       id: "open-staging",
-      scope: "navigate",
+      scope: "commands",
       iconVariant: "green",
       icon: "▦",
       label: "Open staging view",
@@ -190,7 +193,7 @@ function staticCommands(ctx) {
     },
     {
       id: "go-to-history",
-      scope: "navigate",
+      scope: "commands",
       iconVariant: "blue",
       icon: "≡",
       label: "Go to history",
@@ -198,10 +201,10 @@ function staticCommands(ctx) {
       disabled: onGraph,
       run: () => goToHistory?.(),
     },
-    { id: "toggle-terminal", scope: "navigate", iconVariant: "neutral", icon: "▢", ...comingLater("Toggle terminal", "Coming with the terminal drawer."), shortcutLabel: "⌘`" },
+    { id: "toggle-terminal", scope: "commands", iconVariant: "neutral", icon: "▢", ...comingLater("Toggle terminal", "Coming with the terminal drawer."), shortcutLabel: "⌘`" },
     {
       id: "switch-workspace",
-      scope: "navigate",
+      scope: "commands",
       iconVariant: "purple",
       icon: "⌂",
       label: "Switch workspace…",
@@ -216,15 +219,15 @@ function staticCommands(ctx) {
     },
 
     // --- View ---
-    { id: "switch-theme", scope: "view", iconVariant: "neutral", icon: "◐", ...comingLater("Switch theme") },
-    { id: "zoom-in", scope: "view", iconVariant: "neutral", icon: "+", ...comingLater("Increase UI zoom"), shortcutLabel: "⌘+" },
-    { id: "zoom-out", scope: "view", iconVariant: "neutral", icon: "−", ...comingLater("Decrease UI zoom"), shortcutLabel: "⌘−" },
-    { id: "zoom-reset", scope: "view", iconVariant: "neutral", icon: "↺", ...comingLater("Reset UI zoom"), shortcutLabel: "⌘0" },
+    { id: "switch-theme", scope: "commands", iconVariant: "neutral", icon: "◐", ...comingLater("Switch theme") },
+    { id: "zoom-in", scope: "commands", iconVariant: "neutral", icon: "+", ...comingLater("Increase UI zoom"), shortcutLabel: "⌘+" },
+    { id: "zoom-out", scope: "commands", iconVariant: "neutral", icon: "−", ...comingLater("Decrease UI zoom"), shortcutLabel: "⌘−" },
+    { id: "zoom-reset", scope: "commands", iconVariant: "neutral", icon: "↺", ...comingLater("Reset UI zoom"), shortcutLabel: "⌘0" },
 
     // --- Repos ---
     {
       id: "add-repository",
-      scope: "repos",
+      scope: "commands",
       iconVariant: "green",
       icon: "+",
       label: "Add repository…",
@@ -234,7 +237,7 @@ function staticCommands(ctx) {
     },
     {
       id: "clone-repository",
-      scope: "repos",
+      scope: "commands",
       iconVariant: "blue",
       icon: "⇣",
       label: "Clone repository…",
@@ -244,7 +247,7 @@ function staticCommands(ctx) {
     },
     {
       id: "promote-to-workspace",
-      scope: "repos",
+      scope: "commands",
       iconVariant: "purple",
       icon: "⌂",
       label: "Promote to workspace…",
@@ -262,7 +265,7 @@ function staticCommands(ctx) {
     },
     {
       id: "repository-settings",
-      scope: "repos",
+      scope: "commands",
       iconVariant: "neutral",
       icon: "⚙",
       label: "Repository settings…",
@@ -273,7 +276,7 @@ function staticCommands(ctx) {
     },
     {
       id: "preferences",
-      scope: "repos",
+      scope: "commands",
       iconVariant: "neutral",
       icon: "⚙",
       label: "Preferences…",
@@ -293,7 +296,7 @@ async function branchCommands(ctx) {
   const branches = await listBranches(ctx.repoPath).catch(() => []);
   return branches.map((b) => ({
     id: `branch:${b.name}`,
-    scope: "git",
+    scope: "branches",
     iconVariant: b.is_head ? "blue" : "neutral",
     icon: "⎇",
     label: b.name,
@@ -316,14 +319,14 @@ async function branchCommands(ctx) {
  * commits for now; add authors back once that view lands.
  */
 function commitSearchCommands(ctx, query) {
-  if (!query) return Promise.resolve([]);
+  if (query.length < COMMIT_SEARCH_MIN_QUERY_LENGTH) return Promise.resolve([]);
   const filter = SHA_PREFIX_RE.test(query) ? { sha_prefix: query } : { message: query };
   return getGraphRows(ctx.repoPath, 0, COMMIT_SEARCH_SCAN_DEPTH, filter)
     .then((allRows) => {
       const rows = allRows.filter((r) => r.matches).slice(0, COMMIT_SEARCH_MAX_RESULTS);
       return rows.map((r) => ({
         id: `commit:${r.sha}`,
-        scope: "git",
+        scope: "commits",
         iconVariant: "neutral",
         icon: "●",
         label: `${r.short_sha}  ${r.summary}`,
@@ -379,6 +382,8 @@ export function mountCommandPalette(getCtx, { signal } = {}) {
       openPalette = openCommandPalette(commands, {
         onClose: () => (openPalette = null),
         fetchDynamic: (query) => commitSearchCommands(getCtx(), query),
+        dynamicMinQueryLength: COMMIT_SEARCH_MIN_QUERY_LENGTH,
+        dynamicHint: `Type at least ${COMMIT_SEARCH_MIN_QUERY_LENGTH} characters to start searching.`,
       });
     });
   }
