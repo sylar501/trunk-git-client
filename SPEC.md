@@ -225,7 +225,7 @@ rather than inventing a per-panel variant:
   - Shared: Escape/Cancel dismiss all three; in-place progress after primary click; network
     error keeps dialog open with red error box + Retry; footer always shows remote URL.
 
-## 8. Branch dialogs — §13
+## 8. [x] Branch dialogs — §13 — Session 8
 
 - **Frontend**: 4 separate small dialogs (Create/Switch/Rename/Delete)
 - **Backend**: branch create/checkout/rename/delete, merge-status check, dirty-tree
@@ -236,18 +236,34 @@ rather than inventing a per-panel variant:
     border + ✓ valid / red border + specific error); starting-point dropdown defaults HEAD,
     pre-filled with blue info box when opened from graph context menu; "Checkout after
     creating" default-on, "Push to remote after creating" default-off; button disabled until valid.
+    Create/checkout/push are three independent failure boundaries, not one bundled operation: a
+    failed checkout (e.g. a real dirty-tree path collision) doesn't read back as a failed
+    creation — the branch exists either way, so the dialog closes and shows an amber warning
+    toast rather than reopening the form. A successful create(+checkout) with "Push to remote"
+    checked hands off to the Push dialog (§12.1, pre-filled with the new branch) rather than
+    pushing silently inside this dialog — a network push needs that dialog's own progress/retry
+    UI, and push is only ever attempted once create+checkout have both already succeeded.
   - Switch (⌘B, blue git-branch icon): search-focused on open, Enter switches; local branches
     (newest first) then remote-only below a separator; dirty tree shows amber warning + radio
     (stash-and-reapply default, or carry-over); remote branch selection relabels button
     "Checkout & track" with explanatory info box; "Create new branch… ⌘⇧B" link at bottom.
+    Carry-over is conflict-checked explicitly (diffing old vs. target tree against the actual
+    dirty paths) rather than relying on libgit2's non-forced checkout to make that call itself —
+    the latter could both leave clean files' on-disk content stale and silently leave unrelated
+    files half-applied; carry-over now either cleanly applies every non-colliding path or refuses
+    outright, never a partial mix.
   - Rename (amber pencil icon, sidebar context menu only): read-only current name, real-time
     validated new name, amber warning about remote-tracking side effects.
   - Delete (red trash icon, sidebar context menu only): merged branch shows green safe-to-delete
     box with optional "also delete remote" checkbox, delete active immediately; unmerged branch
     shows red warning with commit-loss count and a **mandatory** "I understand this work may be
     lost" checkbox — Force Delete stays disabled at 40% opacity until checked.
-  - Shared: Escape/Cancel dismiss all four; primary input auto-focused; inline
-    spinner→success→auto-close (800ms) instead of immediate close on submit.
+  - Shared: Escape/Cancel dismiss all four; primary input auto-focused. Revised from this
+    section's original "inline spinner→success→auto-close (800ms)" wording during this session:
+    a dialog lingering on a static success message read as stuck rather than confirming, so
+    success now closes the dialog immediately and shows a toast (matching push/fetch/pull/
+    cherry-pick elsewhere in the app) — the dialog only stays open on failure, to show the error
+    inline with enough context to fix and retry.
 
 ## 9. Command palette — §10
 
