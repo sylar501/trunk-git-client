@@ -8,15 +8,22 @@
 //  - Generic (⌘⇧B, no commit in context): only `repoPath` is supplied — a `<select>` lets the
 //    user pick any local branch as the starting point, defaulting to HEAD's branch.
 
-import { createBranchAt, listBranches, listRemotes, pushBranch } from "./app.js";
+import { createBranchAt, checkoutBranch, listBranches, listRemotes, getWorkingTreeStatus } from "./app.js";
 import { openDialog } from "../components/dialog.js";
-import { runDialogTask, validateBranchName } from "./branch-dialog-shared.js";
+import { showToast } from "../components/toast.js";
+import { validateBranchName, confirmDirtyTreeStrategy } from "./branch-dialog-shared.js";
+import { openPushDialog } from "./push-dialog.js";
 
 /**
- * Resolves with `{ created: true, name }` on success; never resolves on cancel.
- * @param {{ sha?: string, shortSha?: string, summary?: string, repoPath: string }} opts
+ * Resolves with `{ created: true, name }` on success; never resolves on cancel. The dialog
+ * itself owns the create/checkout/push-handoff toasts (see `submit()` below) — callers should
+ * only use the resolved value to refresh (e.g. `onMutated`), not to show their own "created"
+ * toast, since that would duplicate or contradict whichever one this dialog already showed.
+ * @param {{ sha?: string, shortSha?: string, summary?: string, repoPath: string, onMutated?: () => Promise<void>|void }} opts
+ *   `onMutated` is only used for the push-handoff step (§13.1's "Push to remote after creating")
+ *   — the create/checkout refresh is the caller's own job after the returned promise resolves.
  */
-export function openCreateBranchDialog({ sha, shortSha, summary, repoPath }) {
+export function openCreateBranchDialog({ sha, shortSha, summary, repoPath, onMutated }) {
   return new Promise((resolve) => {
     const fixedStartingPoint = Boolean(sha);
 
@@ -130,26 +137,83 @@ export function openCreateBranchDialog({ sha, shortSha, summary, repoPath }) {
         revalidate();
       }
 
-      function submit() {
+      // "Checkout after creating" moves HEAD to a new starting point exactly like the Switch
+      // dialog does — same dirty-tree exposure, so it gets the same upfront dirty check +
+      // stash/carry confirm as Switch, rather than silently checking out with no warning.
+      //
+      // Create, checkout, and push are three independent failure boundaries, deliberately not
+      // run as one bundled task (see this session's bug history): the branch can exist even if
+      // checkout fails, and checkout can succeed even if a later push fails (invalid credentials,
+      // no network, etc) — collapsing them into one try/catch made every later failure look like
+      // "nothing happened" and skipped refreshing the sidebar/graph even though the branch was
+      // real. Push itself is no longer attempted here at all: a network push needs progress/retry
+      // UI the Push dialog already has, so success just hands off to it instead of pushing
+      // silently inside this dialog's own spinner.
+      async function submit() {
         const name = state.name.trim();
-        runDialogTask(dlg, {
-          task: async () => {
-            await createBranchAt(repoPath, state.sha, name, state.checkout);
-            if (state.push && remotes.length > 0) {
-              await pushBranch(repoPath, name, remotes[0], name, true, false, false);
-            }
-          },
-          onMutated: () => resolve({ created: true, name }),
-          onError: (err) => {
-            render();
-            const errorEl = dlg.bodyEl.querySelector("#branch-error");
-            const nameInput = dlg.bodyEl.querySelector("#branch-name");
-            nameInput.classList.add("err");
-            errorEl.hidden = false;
-            errorEl.textContent = String(err);
-            nameInput.focus();
-          },
-        });
+
+        let dirtyStrategy;
+        if (state.checkout) {
+          let dirty = false;
+          try {
+            dirty = (await getWorkingTreeStatus(repoPath)).files.length > 0;
+          } catch {
+            dirty = false;
+          }
+          if (dirty) {
+            dirtyStrategy = await confirmDirtyTreeStrategy("Create branch");
+            if (!dirtyStrategy) return; // cancelled — leave the form as-is
+          }
+        }
+
+        dlg.setBody(`<div class="loading-center"><div class="spinner lg"></div></div>`);
+        dlg.setFooter("");
+
+        // Step 1: create the ref. Failure here means nothing happened — restore the form with an
+        // inline error, same convention as every other dialog's failure path.
+        try {
+          await createBranchAt(repoPath, state.sha, name);
+        } catch (err) {
+          render();
+          const errorEl = dlg.bodyEl.querySelector("#branch-error");
+          const nameInput = dlg.bodyEl.querySelector("#branch-name");
+          nameInput.classList.add("err");
+          errorEl.hidden = false;
+          errorEl.textContent = String(err);
+          nameInput.focus();
+          return;
+        }
+
+        // Step 2: optionally check it out. The branch exists regardless of what happens here, so
+        // a failure must not look like creation failed — close the dialog, refresh (via the
+        // resolved promise below), and surface a distinct warning toast instead of reopening the
+        // form for an operation that already partially succeeded.
+        let checkoutFailed = false;
+        let checkoutErrorMessage = "";
+        if (state.checkout) {
+          try {
+            await checkoutBranch(repoPath, name, { dirtyStrategy });
+          } catch (err) {
+            checkoutFailed = true;
+            checkoutErrorMessage = String(err);
+          }
+        }
+
+        dlg.close();
+        if (checkoutFailed) {
+          showToast({ variant: "warning", message: `Branch ${name} created, but checkout failed: ${checkoutErrorMessage}` });
+        } else {
+          showToast({ variant: "success", message: `Branch ${name} created.` });
+        }
+        resolve({ created: true, name });
+
+        // Step 3: push handoff. Only offered once create+checkout both succeeded — pushing
+        // doesn't strictly require a checkout to have worked, but a checkout failure means
+        // something unexpected happened that's worth pausing on rather than barreling into a
+        // second dialog.
+        if (!checkoutFailed && state.push && remotes.length > 0) {
+          openPushDialog({ repoPath, initialLocalBranch: name, onMutated });
+        }
       }
 
       render();

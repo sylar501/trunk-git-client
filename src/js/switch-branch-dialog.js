@@ -6,7 +6,6 @@
 import { listBranchesForSwitch, getWorkingTreeStatus, checkoutBranch } from "./app.js";
 import { laneColorVar } from "../components/commit-row.js";
 import { openDialog } from "../components/dialog.js";
-import { showToast } from "../components/toast.js";
 import { runDialogTask, confirmDirtyTreeStrategy } from "./branch-dialog-shared.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
 
@@ -110,9 +109,9 @@ export function openSwitchBranchDialog({ repoPath, onMutated }) {
 
         dlg.bodyEl.querySelector("#sb-create-new").addEventListener("click", () => {
           dlg.close();
-          openCreateBranchDialog({ repoPath }).then(async (result) => {
+          // The dialog itself already shows the create/checkout-failure toast.
+          openCreateBranchDialog({ repoPath, onMutated }).then(async (result) => {
             if (!result?.created) return;
-            showToast({ variant: "success", message: `Branch ${result.name} created.` });
             await onMutated?.();
             resolve({ switched: true, name: result.name });
           });

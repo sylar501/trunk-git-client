@@ -73,8 +73,8 @@ impl Repo {
         abort_in_progress_operation(&self.inner).map_err(|e| e.to_string())
     }
 
-    pub fn create_branch_at(&self, sha: &str, name: &str, checkout: bool) -> Result<(), String> {
-        create_branch_at(&self.inner, sha, name, checkout)
+    pub fn create_branch_at(&self, sha: &str, name: &str) -> Result<(), String> {
+        create_branch_at(&self.inner, sha, name)
     }
 
     pub fn list_branches_for_switch(&self) -> Result<Vec<SwitchBranchEntry>, String> {
@@ -1174,41 +1174,22 @@ fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Re
     Ok(ConflictableOutcome::Completed { sha: new_oid.to_string() })
 }
 
-/// Creates a branch at `sha`, optionally checking it out (SPEC.md item 8's "Checkout after
-/// creating" checkbox, default on). `repo.branch(..., force: false)` surfaces git2's natural
+/// Creates a branch at `sha`. `repo.branch(..., force: false)` surfaces git2's natural
 /// duplicate-name error rather than silently overwriting.
 ///
-/// The starting point can be any commit (the graph context menu's "branch from here" passes
-/// whichever row was clicked, not just HEAD's own commit) — so this checkout is exactly the
-/// same "move across two potentially very different trees" case `checkout_branch` has, with the
-/// same fix: force when the tree is clean (nothing at risk, and libgit2's non-forced
-/// `GIT_CHECKOUT_SAFE` default can otherwise leave on-disk file content stale relative to the
-/// tree it just checked out into the index — see `checkout_branch`'s comment for the full
-/// writeup). A dirty tree still gets the non-forced safety check, so it fails loudly instead of
-/// being clobbered.
-fn create_branch_at(repo: &Repository, sha: &str, name: &str, checkout: bool) -> Result<(), String> {
+/// Deliberately ref-creation only — never checks out. SPEC.md item 8's "Checkout after
+/// creating" checkbox is handled by the frontend as a *separate* call to `checkout_branch` once
+/// this one succeeds (create-branch-dialog.js), rather than this function doing both: the
+/// starting point can be any commit (graph context menu's "branch from here" passes whichever
+/// row was clicked), so checking it out afterward is exactly `checkout_branch`'s own "move across
+/// two potentially very different trees" case (dirty-tree stash/carry handling included) — no
+/// reason to duplicate that logic here. It also gives the two steps independent failure
+/// boundaries: a failed checkout shouldn't read back as "branch creation failed" when the branch
+/// genuinely exists.
+fn create_branch_at(repo: &Repository, sha: &str, name: &str) -> Result<(), String> {
     let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
-    let branch = repo.branch(name, &commit, false).map_err(|e| e.to_string())?;
-    if !checkout {
-        return Ok(());
-    }
-    let refname = branch
-        .get()
-        .name()
-        .ok_or_else(|| "Created branch has an invalid reference name.".to_string())?
-        .to_string();
-    // Must be checked *before* `set_head` — moving HEAD alone (before any checkout) already
-    // changes what the index is compared against, so checking after would compare the new
-    // branch's tree against the still-unchanged old index and spuriously report "dirty" even on
-    // a tree with nothing actually uncommitted.
-    let clean = is_working_tree_clean(repo).map_err(|e| e.to_string())?;
-    repo.set_head(&refname).map_err(|e| e.to_string())?;
-    let mut builder = git2::build::CheckoutBuilder::new();
-    if clean {
-        builder.force();
-    }
-    repo.checkout_head(Some(&mut builder)).map_err(|e| e.to_string())?;
+    repo.branch(name, &commit, false).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1296,6 +1277,133 @@ pub enum DirtyTreeStrategy {
     Carry,
 }
 
+/// Moves HEAD to `refname` and applies it to the index/working tree — shared by `checkout_branch`
+/// (Switch branch, §13.2) and `create_branch_at`'s "checkout after creating" step (Create branch,
+/// §13.1), since both are exactly the same "move across two potentially very different trees"
+/// operation. `dirty_strategy` is only consulted when the working tree is actually dirty; a
+/// clean tree ignores it entirely and always proceeds.
+///
+/// Must check dirtiness *before* `set_head` — moving HEAD alone (before any checkout) already
+/// changes what the index is compared against, so checking after would compare the new tree
+/// against the still-unchanged old index and spuriously report "dirty" even when nothing is
+/// actually uncommitted.
+/// Paths `repo.statuses(None)` reports as touched — staged or unstaged, matching
+/// `is_working_tree_clean`'s own definition of "dirty" (untracked files excluded, same as that
+/// function). Used both to decide *whether* the tree is dirty and, for the "carry over" strategy
+/// below, exactly *which* paths are real local edits that must not be clobbered.
+fn dirty_status_paths(repo: &Repository) -> Result<HashSet<String>, String> {
+    Ok(repo
+        .statuses(None)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(|e| e.path().map(String::from))
+        .collect())
+}
+
+/// Paths whose blob differs between `old_tree` and `new_tree` — i.e. exactly the paths a checkout
+/// from one to the other needs to touch.
+fn tree_diff_paths(repo: &Repository, old_tree: &git2::Tree, new_tree: &git2::Tree) -> Result<HashSet<String>, String> {
+    let diff = repo
+        .diff_tree_to_tree(Some(old_tree), Some(new_tree), None)
+        .map_err(|e| e.to_string())?;
+    let mut paths = HashSet::new();
+    for delta in diff.deltas() {
+        if let Some(p) = delta.old_file().path() {
+            paths.insert(p.to_string_lossy().into_owned());
+        }
+        if let Some(p) = delta.new_file().path() {
+            paths.insert(p.to_string_lossy().into_owned());
+        }
+    }
+    Ok(paths)
+}
+
+fn checkout_ref_with_dirty_handling(
+    repo: &Repository,
+    refname: &str,
+    dirty_strategy: Option<DirtyTreeStrategy>,
+) -> Result<(), String> {
+    let dirty_paths = dirty_status_paths(repo)?;
+    let dirty = !dirty_paths.is_empty();
+    let stash_sig = if dirty && matches!(dirty_strategy, Some(DirtyTreeStrategy::Stash)) {
+        Some(repo.signature().map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+
+    if dirty && dirty_strategy.is_none() {
+        return Err("Working tree has uncommitted changes — choose how to handle them before switching.".to_string());
+    }
+
+    // "Carry over" keeps the dirty paths in place rather than stashing them — so unlike the
+    // clean/stashed cases below, this checkout must not touch every path the target tree
+    // differs on, only the ones that don't collide with the user's actual edits. Originally this
+    // relied on libgit2's non-forced `GIT_CHECKOUT_SAFE` strategy to make that per-path call —
+    // but its stat-based "would this overwrite something" heuristic turned out to be unreliable
+    // in two different ways (see `create_branch_at`'s and `checkout_branch`'s history): it can
+    // both leave a file's on-disk content stale when nothing was at risk, *and* — the case this
+    // fixes — silently leave OTHER, never-touched-by-the-user files half-applied (index updated,
+    // workdir not) instead of cleanly checking them out. So the overlap is now computed
+    // explicitly: diff old HEAD's tree against the target tree for the exact path set checkout
+    // needs to touch, refuse loudly (matching §13.2's "may fail on conflict") only if that set
+    // overlaps the user's real dirty paths, and otherwise force exactly those paths — guaranteed
+    // correct, and guaranteed to never touch a path the user didn't ask to change.
+    let carrying_real_changes = dirty && matches!(dirty_strategy, Some(DirtyTreeStrategy::Carry));
+    let touched_paths = if carrying_real_changes {
+        let old_tree = repo.head().map_err(|e| e.to_string())?.peel_to_tree().map_err(|e| e.to_string())?;
+        let target_oid = repo.refname_to_id(refname).map_err(|e| e.to_string())?;
+        let new_tree = repo.find_commit(target_oid).map_err(|e| e.to_string())?.tree().map_err(|e| e.to_string())?;
+        let touched = tree_diff_paths(repo, &old_tree, &new_tree)?;
+        let conflicting: Vec<&String> = touched.iter().filter(|p| dirty_paths.contains(*p)).collect();
+        if !conflicting.is_empty() {
+            let mut names: Vec<String> = conflicting.into_iter().cloned().collect();
+            names.sort();
+            return Err(format!("Switching would overwrite uncommitted changes in: {}", names.join(", ")));
+        }
+        Some(touched)
+    } else {
+        None
+    };
+
+    if let Some(sig) = &stash_sig {
+        // `stash_save2` needs `&mut Repository`, but this function only takes `&Repository`
+        // (matching every other free function in this file, which all go through `Repo`'s
+        // shared `&self.inner`) — open a second, independent handle onto the same on-disk repo
+        // rather than threading `&mut` through the whole call chain for this one caller.
+        let mut repo_mut = Repository::open(repo.path()).map_err(|e| e.to_string())?;
+        repo_mut
+            .stash_save2(sig, None, Some(git2::StashFlags::INCLUDE_UNTRACKED))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let checkout_result = (|| {
+        repo.set_head(refname).map_err(|e| e.to_string())?;
+        let mut builder = git2::build::CheckoutBuilder::new();
+        builder.force();
+        // Restrict the forced checkout to exactly the paths the carry-over case verified above
+        // are safe (no overlap with real dirty paths) — every other case (clean tree, or one
+        // just emptied by `stash_save2`) has nothing left to protect, so it forces the whole tree.
+        if let Some(touched) = &touched_paths {
+            for path in touched {
+                builder.path(path);
+            }
+        }
+        repo.checkout_head(Some(&mut builder)).map_err(|e| e.to_string())
+    })();
+
+    if stash_sig.is_some() {
+        let mut repo_mut = Repository::open(repo.path()).map_err(|e| e.to_string())?;
+        // Best-effort: if the checkout itself failed, there's nothing to reapply onto; if it
+        // succeeded but the pop conflicts, surface that as the operation's own error rather than
+        // swallowing it — the stash stays on the stack either way so nothing is lost.
+        if checkout_result.is_ok() {
+            repo_mut.stash_pop(0, None).map_err(|e| e.to_string())?;
+        }
+    }
+
+    checkout_result
+}
+
 /// Switches HEAD to `name` (a local branch, or — when `remote` is given — creates a local
 /// tracking branch for a remote-only one first, matching the "Checkout & track" button label).
 /// `dirty_strategy` is only consulted when the working tree is actually dirty; a clean tree
@@ -1316,28 +1424,6 @@ fn checkout_branch(
             .map_err(|e| e.to_string())?;
     }
 
-    let dirty = !is_working_tree_clean(repo).map_err(|e| e.to_string())?;
-    let stash_sig = if dirty && matches!(dirty_strategy, Some(DirtyTreeStrategy::Stash)) {
-        Some(repo.signature().map_err(|e| e.to_string())?)
-    } else {
-        None
-    };
-
-    if dirty && dirty_strategy.is_none() {
-        return Err("Working tree has uncommitted changes — choose how to handle them before switching.".to_string());
-    }
-
-    if let Some(sig) = &stash_sig {
-        // `stash_save2` needs `&mut Repository`, but `checkout_branch` only takes `&Repository`
-        // (matching every other free function in this file, which all go through `Repo`'s
-        // shared `&self.inner`) — open a second, independent handle onto the same on-disk repo
-        // rather than threading `&mut` through the whole call chain for this one caller.
-        let mut repo_mut = Repository::open(repo.path()).map_err(|e| e.to_string())?;
-        repo_mut
-            .stash_save2(sig, None, Some(git2::StashFlags::INCLUDE_UNTRACKED))
-            .map_err(|e| e.to_string())?;
-    }
-
     let branch_ref = repo.find_branch(name, BranchType::Local).map_err(|e| e.to_string())?;
     let refname = branch_ref
         .get()
@@ -1345,36 +1431,7 @@ fn checkout_branch(
         .ok_or_else(|| "Branch has an invalid reference name.".to_string())?
         .to_string();
 
-    // libgit2's default (non-forced) `GIT_CHECKOUT_SAFE` strategy decides per-path, from stat
-    // info, whether a file "would be overwritten" — and that judgment can be wrong, leaving a
-    // file's on-disk content stale (not matching the tree it just checked out into the index)
-    // even though nothing was actually at risk. That's only an acceptable trade-off for the
-    // "carry over" dirty-tree strategy, which deliberately wants this safety net so it fails
-    // loudly instead of clobbering real uncommitted changes (§13.2's "may fail on conflict").
-    // Every other case here has nothing left to protect — a clean tree, or a tree just emptied
-    // by `stash_save2` above — so force it to guarantee the working directory actually ends up
-    // matching the target tree.
-    let force_checkout = !dirty || matches!(dirty_strategy, Some(DirtyTreeStrategy::Stash));
-    let checkout_result = (|| {
-        repo.set_head(&refname).map_err(|e| e.to_string())?;
-        let mut builder = git2::build::CheckoutBuilder::new();
-        if force_checkout {
-            builder.force();
-        }
-        repo.checkout_head(Some(&mut builder)).map_err(|e| e.to_string())
-    })();
-
-    if stash_sig.is_some() {
-        let mut repo_mut = Repository::open(repo.path()).map_err(|e| e.to_string())?;
-        // Best-effort: if the checkout itself failed, there's nothing to reapply onto; if it
-        // succeeded but the pop conflicts, surface that as the operation's own error rather than
-        // swallowing it — the stash stays on the stack either way so nothing is lost.
-        if checkout_result.is_ok() {
-            repo_mut.stash_pop(0, None).map_err(|e| e.to_string())?;
-        }
-    }
-
-    checkout_result
+    checkout_ref_with_dirty_handling(repo, &refname, dirty_strategy)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3549,29 +3606,28 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Same regression as `checkout_branch_rewrites_workdir_content_when_switching_to_an_older_commit`,
-    // but for the "branch from here" path (graph context menu / SPEC.md item 8's Create-branch
-    // dialog with "Checkout after creating" on): creating a branch *at an older commit* than
-    // HEAD and checking it out immediately must actually rewrite the working directory, not just
-    // move HEAD.
+    // `create_branch_at` is ref-creation only — never touches HEAD or the working tree.
+    // "Checkout after creating" is the frontend separately calling `checkout_branch` once this
+    // succeeds (see that function's own dirty-tree-handling tests above for the checkout half of
+    // what used to be exercised here), so a failed checkout can never be mistaken for a failed
+    // creation — the branch this test creates must exist regardless of what happens next.
     #[test]
-    fn create_branch_at_rewrites_workdir_content_when_starting_point_is_an_older_commit() {
+    fn create_branch_at_only_creates_the_ref_without_touching_head_or_workdir() {
         let (dir, repo) = temp_repo();
         let c1 = commit_with_file(&repo, &dir, "first", &[], "a.txt", "older content\n");
         commit_with_file(&repo, &dir, "second", &[&repo.find_commit(c1).unwrap()], "a.txt", "newer content\n");
-        // HEAD (main) is now at "second" with "newer content"; "feature" is about to be created
-        // at "first" ("older content") and checked out immediately.
+        let head_before = repo.head().unwrap().shorthand().unwrap().to_string();
 
-        create_branch_at(&repo, &c1.to_string(), "feature", true).unwrap();
+        create_branch_at(&repo, &c1.to_string(), "feature").unwrap();
 
-        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "feature");
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), head_before, "create must not move HEAD");
         assert_eq!(
             std::fs::read_to_string(dir.join("a.txt")).unwrap(),
-            "older content\n",
-            "working directory should actually contain the new branch's starting-point content"
+            "newer content\n",
+            "create must not touch the working directory"
         );
-        let status = working_tree_status(&repo).unwrap();
-        assert!(status.files.is_empty(), "tree should be clean immediately after creating+checking out, found: {:?}", status.files);
+        let feature_tip = repo.find_branch("feature", BranchType::Local).unwrap().get().target().unwrap();
+        assert_eq!(feature_tip.to_string(), c1.to_string(), "new branch should point at the requested starting commit");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -3606,6 +3662,87 @@ mod tests {
             "dirty\n",
             "stashed change should be reapplied after the switch"
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Regression: "carry over" used to rely on libgit2's non-forced `GIT_CHECKOUT_SAFE` strategy
+    // to decide what was safe to touch on a dirty tree — but that left every file the target
+    // branch changes (not just the user's actual edit) as a phantom uncommitted diff, because
+    // SAFE's stat-based detection updated the index without always rewriting the workdir to
+    // match. With an explicit tree-diff-based path restriction, only the user's real edit should
+    // remain pending after carrying over, and `a.txt` (which the user never touched) must come
+    // out cleanly matching the target branch.
+    #[test]
+    fn checkout_branch_carry_over_only_leaves_the_users_real_edit_pending() {
+        let (dir, repo) = temp_repo();
+        let base = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\n");
+        let base_commit = repo.find_commit(base).unwrap();
+        repo.branch("target", &base_commit, false).unwrap();
+        // Advance "target" without moving HEAD (still on main/base) — a.txt differs between the
+        // two branches, exactly like the bug report's "diff between the previous and new branch".
+        let sig = repo.signature().unwrap();
+        let tree_oid = {
+            let blob = repo.blob(b"two\n").unwrap();
+            let mut builder = repo.treebuilder(Some(&base_commit.tree().unwrap())).unwrap();
+            builder.insert("a.txt", blob, 0o100644).unwrap();
+            builder.write().unwrap()
+        };
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("refs/heads/target"), &sig, &sig, "advance target", &tree, &[&base_commit]).unwrap();
+
+        // The user's one real uncommitted change: a staged new file, unrelated to a.txt.
+        std::fs::write(dir.join("new.txt"), "mine\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("new.txt")).unwrap();
+        index.write().unwrap();
+
+        checkout_branch(&repo, "target", None, Some(DirtyTreeStrategy::Carry)).unwrap();
+
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "target");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "two\n",
+            "a.txt should be cleanly checked out to the target branch's content, not left stale"
+        );
+        let status = working_tree_status(&repo).unwrap();
+        assert_eq!(
+            status.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            vec!["new.txt"],
+            "only the user's real edit should remain pending, found: {:?}",
+            status.files
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn checkout_branch_carry_over_refuses_a_real_conflict() {
+        let (dir, repo) = temp_repo();
+        let base = commit_with_file(&repo, &dir, "base", &[], "a.txt", "one\n");
+        let base_commit = repo.find_commit(base).unwrap();
+        let original_branch = repo.head().unwrap().shorthand().unwrap().to_string();
+        repo.branch("target", &base_commit, false).unwrap();
+        let sig = repo.signature().unwrap();
+        let tree_oid = {
+            let blob = repo.blob(b"two\n").unwrap();
+            let mut builder = repo.treebuilder(Some(&base_commit.tree().unwrap())).unwrap();
+            builder.insert("a.txt", blob, 0o100644).unwrap();
+            builder.write().unwrap()
+        };
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("refs/heads/target"), &sig, &sig, "advance target", &tree, &[&base_commit]).unwrap();
+
+        // This time the user's uncommitted edit is to the *same* path the target branch changes.
+        std::fs::write(dir.join("a.txt"), "my edit\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        let result = checkout_branch(&repo, "target", None, Some(DirtyTreeStrategy::Carry));
+        assert!(result.is_err(), "carrying over a real path collision should refuse, not silently overwrite");
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), original_branch, "HEAD must not move on refusal");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "my edit\n", "the user's edit must be untouched");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -91,8 +91,8 @@ export async function revertCommit(repoPath, sha, noCommit = false) {
   return invoke("revert_commit", { repoPath, sha, noCommit });
 }
 
-export async function createBranchAt(repoPath, sha, name, checkout = true) {
-  return invoke("create_branch_at", { repoPath, sha, name, checkout });
+export async function createBranchAt(repoPath, sha, name) {
+  return invoke("create_branch_at", { repoPath, sha, name });
 }
 
 export async function getConflictStatus(repoPath) {

@@ -118,10 +118,11 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
   // it here would leave the overlay's own buttons disabled forever if the user cancels — the
   // overlay should only stay disabled for the brief synchronous "open the dialog" step.
   async function onBranchFromHere({ sha, shortSha, summary }) {
-    openCreateBranchDialog({ sha, shortSha, summary, repoPath })
+    // The dialog itself already shows the create/checkout-failure toast (see
+    // create-branch-dialog.js's `submit()`) — this just refreshes once it's done.
+    openCreateBranchDialog({ sha, shortSha, summary, repoPath, onMutated })
       .then(async (result) => {
         if (!result?.created) return;
-        showToast({ variant: "success", message: `Branch ${result.name} created.` });
         await onMutated?.();
       })
       .catch((err) => {
@@ -233,10 +234,10 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "b") return;
       e.preventDefault();
       if (e.shiftKey) {
-        openCreateBranchDialog({ repoPath })
+        // The dialog itself already shows the create/checkout-failure toast.
+        openCreateBranchDialog({ repoPath, onMutated })
           .then(async (result) => {
             if (!result?.created) return;
-            showToast({ variant: "success", message: `Branch ${result.name} created.` });
             await onMutated?.();
           })
           .catch((err) => showToast({ variant: "danger", message: String(err) }));

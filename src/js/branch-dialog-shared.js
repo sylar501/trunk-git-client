@@ -11,11 +11,15 @@ import { openDialog } from "../components/dialog.js";
 
 /**
  * The dirty-tree "stash automatically / carry over" choice (§13.2), shared by the full Switch
- * dialog and the sidebar's direct branch-row click (sidebar.js) so both go through the exact
- * same confirm UI. Resolves `"stash"` / `"carry"`, or `null` on Cancel.
+ * dialog, the sidebar's direct branch-row click (sidebar.js), and Create branch's "checkout
+ * after creating" step (create-branch-dialog.js — checking out a new branch at a different
+ * starting point is exactly the same "move HEAD across trees" operation as switching) — all
+ * three go through the exact same confirm UI. Resolves `"stash"` / `"carry"`, or `null` on
+ * Cancel.
+ * @param {string} [actionLabel] - primary button label; defaults to "Switch".
  * @returns {Promise<"stash"|"carry"|null>}
  */
-export function confirmDirtyTreeStrategy() {
+export function confirmDirtyTreeStrategy(actionLabel = "Switch") {
   return new Promise((resolve) => {
     const dlg = openDialog({
       icon: "⚠",
@@ -29,7 +33,7 @@ export function confirmDirtyTreeStrategy() {
       `,
       footerHtml: `
         <div class="btn btn-neutral" id="dts-cancel">Cancel</div>
-        <div class="btn btn-blue" id="dts-go">Switch</div>
+        <div class="btn btn-blue" id="dts-go">${actionLabel}</div>
       `,
     });
     dlg.footerEl.querySelector("#dts-cancel").addEventListener("click", () => {

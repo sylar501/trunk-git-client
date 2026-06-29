@@ -15,8 +15,12 @@ import { openDialog } from "../components/dialog.js";
 import { showToast } from "../components/toast.js";
 import { renderCommitList, fillCommitListText, createProgressLog, attachEnterToClose } from "./push-pull-shared.js";
 
-/** @param {{ repoPath: string, onMutated?: () => Promise<void>|void }} opts */
-export async function openPushDialog({ repoPath, onMutated }) {
+/**
+ * @param {{ repoPath: string, onMutated?: () => Promise<void>|void, initialLocalBranch?: string }} opts
+ *   `initialLocalBranch` overrides the default "whichever branch is HEAD" pick — used by the
+ *   Create-branch dialog's push handoff, where the just-created branch may not be checked out.
+ */
+export async function openPushDialog({ repoPath, onMutated, initialLocalBranch }) {
   let branches, tracking, remotes;
   try {
     [branches, tracking, remotes] = await Promise.all([
@@ -32,7 +36,10 @@ export async function openPushDialog({ repoPath, onMutated }) {
     showToast({ variant: "danger", message: "This repository has no remotes configured." });
     return;
   }
-  const currentBranch = branches.find((b) => b.is_head)?.name ?? branches[0]?.name;
+  const currentBranch =
+    (initialLocalBranch && branches.some((b) => b.name === initialLocalBranch) ? initialLocalBranch : undefined) ??
+    branches.find((b) => b.is_head)?.name ??
+    branches[0]?.name;
   if (!currentBranch) {
     showToast({ variant: "danger", message: "No local branches to push." });
     return;

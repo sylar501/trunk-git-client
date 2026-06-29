@@ -482,10 +482,10 @@ pub async fn abort_conflict_resolution(
 }
 
 #[tauri::command]
-pub async fn create_branch_at(repo_path: String, sha: String, name: String, checkout: bool) -> Result<(), String> {
+pub async fn create_branch_at(repo_path: String, sha: String, name: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.create_branch_at(&sha, &name, checkout)
+        repo.create_branch_at(&sha, &name)
     })
     .await
     .map_err(|e| e.to_string())?
