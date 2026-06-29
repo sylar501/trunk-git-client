@@ -142,6 +142,32 @@ pub fn create_workspace(
     Ok(result)
 }
 
+/// Promotes the currently-open Repository-mode repo into a brand-new workspace containing
+/// just that repo (PRD §15, command palette only per SPEC.md item 2's deferral to item 9) —
+/// unlike `create_workspace` above (used pre-open, from `welcome.js`, with no live state to
+/// patch), this flips `AppState` from Repository to Workspace mode in place so the sidebar
+/// reflects it immediately, no restart/re-navigation required.
+#[tauri::command]
+pub fn promote_to_workspace(
+    app: AppHandle,
+    state: State<'_, Mutex<AppState>>,
+    name: String,
+    directory: String,
+) -> Result<workspace::WorkspaceSession, String> {
+    let mut s = state.lock().unwrap();
+    let repo_path = s.repo_path.clone().ok_or("No repository is open.")?;
+    let result = workspace::create_workspace(&name, &directory, vec![repo_path.clone()])?;
+    let session = workspace::open_workspace_session(&result.path)?;
+    s.mode = Some(AppMode::Workspace);
+    s.repo_path = None;
+    s.workspace_path = Some(result.path.clone());
+    s.workspace = Some(session.workspace.clone());
+    s.active_repo = Some(repo_path);
+    drop(s);
+    recent::record(&app, &result.path, RecentKind::Workspace)?;
+    Ok(session)
+}
+
 #[tauri::command]
 pub async fn clone_repository(
     app: AppHandle,
@@ -319,6 +345,26 @@ pub fn get_graph_rows(
         })
         .collect();
     Ok(rows)
+}
+
+/// Row index of a single commit within the cached graph's existing order (PRD §10.2's command
+/// palette commit search needs this to jump the already-mounted graph view straight to a
+/// result, the same row index `get_graph_rows` above already slices by — not a separate
+/// lookup, just `position()` over the same `cache.rows` that command also reads).
+#[tauri::command]
+pub fn get_commit_index(
+    graph_state: State<'_, GraphState>,
+    repo_path: String,
+    sha: String,
+) -> Result<Option<usize>, String> {
+    let guard = graph_state.lock().unwrap();
+    let (cached_path, cache) = guard
+        .as_ref()
+        .ok_or_else(|| "Graph not opened for this repo — call open_graph first.".to_string())?;
+    if cached_path != &repo_path {
+        return Err("Graph cache is for a different repository — call open_graph first.".into());
+    }
+    Ok(cache.rows.iter().position(|r| r.sha == sha))
 }
 
 /// Local branches for the sidebar Branches section (PRD §4.2) — colour-hashed the same way

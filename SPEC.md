@@ -267,7 +267,9 @@ rather than inventing a per-panel variant:
 
 ## 9. Command palette — §10
 
-- **Frontend**: `src/components/command-palette.js`, global overlay
+- **Frontend**: `src/components/command-palette.js` (global overlay, UI only), `src/js/
+  command-registry.js` (builds the command list + dynamic groups for a context, mounts ⌘K +
+  the §6 shortcut map into a host page)
 - **Backend**: in-memory command/branch/file/commit/author index (rebuilt on repo/workspace switch)
 - **Dependencies**: Main graph view (3), Branch dialogs (8) for command inventory entries
 - **Acceptance criteria**:
@@ -279,11 +281,29 @@ rather than inventing a per-panel variant:
     line, right-aligned shortcut.
   - ↑↓ select, Enter run+close, ⌘Enter run+keep-open, Tab cycle tabs, Escape close.
   - Performance: open <50ms, results <16ms per keystroke — index only, never touches
-    filesystem/git per keystroke.
-  - Command inventory per §10.6 (branch/push/fetch/pull/rebase/stash/tag/cherry-pick/revert
-    under Git; staging/history/terminal/repo/workspace switch under Navigate; theme/zoom under
-    View; add/clone/settings under Repos) — wire in the new shortcuts from §6 (⌘⇧B, ⌘B, ⌘P,
-    ⌘F, ⌘⇧P, ⌘⇧R).
+    filesystem/git per keystroke. **One documented exception**: commit/author search has no
+    backend index to query (none exists anywhere in this codebase yet — the graph's own filter
+    bar queries git per keystroke too, debounced) and goes through the same debounced
+    `getGraphRows` call instead, via `command-palette.js`'s `fetchDynamic` hook. Branches and
+    recently-changed files stay index-only (one `listBranches`/`getWorkingTreeStatus` call at
+    open-time, filtered in memory per keystroke).
+  - Command inventory per §10.6, with three deliberate omissions from this section's literal
+    wording: rename/delete branch (item 8's sidebar-context-menu-only override stands), cherry-
+    pick/revert (need a specific target commit a text-search palette can't supply — stay on the
+    commit-detail overlay), and "switch repository" (Workspace mode's per-repo list would just
+    duplicate the sidebar's own one-click rows). Merge branch/rebase/stash/pop stash/create tag/
+    toggle terminal/switch theme/zoom in/out/reset ship as visible-but-disabled rows — no
+    backend or persisted setting exists yet for any of them (items 10–13/16/19) — re-enable in
+    place once each lands. New shortcuts from §6 (⌘⇧B, ⌘B, ⌘P, ⌘F, ⌘⇧P, ⌘⇧R) wired in (⌘⇧R
+    is a no-op toast until rebase exists).
+  - Mounted on `index.html`, `staging.html`, `resolve.html` only — not `welcome.html` or
+    `preferences.html` (no repo/workspace context yet on the former, no controller script at
+    all yet on the latter; same precedent as item 1's `FAST_PATH_ENABLED` gating).
+  - Closes out item 2's deferral: "Promote to workspace…" is implemented for real here (Repos
+    scope, Repository mode only) via a new `promote_to_workspace` backend command that flips
+    the live `AppState` from Repository to Workspace mode in place, no restart required —
+    reuses `welcome.js`'s `promptWorkspaceDetails` prompt (now exported) rather than a second
+    name+directory dialog.
 
 ## 10. Interactive rebase — §16
 
@@ -419,3 +439,20 @@ This entry is kept (not deleted) to preserve numbering for anything referencing 
 AI features of any kind · forge integrations (GitHub/GitLab/Bitbucket PR/MR features — plugin
 host only, §21, is P2 in-scope) · **GPG commit signing** (SSH only) · **blame view** · mobile/web
 clients · SVN/Mercurial · auto-update (manual updates only in v1).
+
+## Future ideas (not yet scheduled into a session)
+
+1. **Author/contributor dialog**: the command palette's author search (item 9, §10.2) has no
+   per-author destination to land on yet — there's no dedicated user/contributor dialog or
+   view (commit count, first/last activity, authored branches/tags, etc.). Until this exists,
+   `command-registry.js` deliberately does not surface author rows in search results (see its
+   `commitSearchCommands` — referenced there as "Future ideas #1"); add them back once this
+   lands, wired to open it.
+2. **File search**: the command palette's file search (item 9, §10.2) is dropped for the same
+   reason — `getWorkingTreeStatus` only ever returns *uncommitted* files, so "file search"
+   today could only mean "currently-dirty files," which isn't what that label promises and
+   needs its own decision (full repo tree? tracked files only? still working-tree-only but
+   labelled honestly?) plus, separately, an actual destination once a file is selected
+   (currently it would just land on the generic staging view, not that file's diff —
+   `staging-view.js` has no "open this specific file" entry point to jump to either). Needs
+   real specification before it's re-added, not just a backend swap.

@@ -238,6 +238,160 @@ textarea,
   font-family: inherit;
 }
 
+/* ── command palette (PRD §10, SPEC.md item 9) ───────────────────────
+   Same dimming approach as `.dlg-overlay`/`.dlg` above, positioned near the top third of the
+   screen instead of dead-centre (standard palette convention) and wider than a dialog. Icon
+   chips reuse the same six ic-b/g/r/a/p/n colour pairs as `.dh-icon` at a smaller size rather
+   than re-deriving the colour logic. */
+
+.cmdp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 1100;
+}
+
+.cmdp-panel {
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cmdp-input {
+  height: 38px;
+  flex-shrink: 0;
+  padding: 0 13px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.cmdp-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.cmdp-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.cmdp-tab {
+  font-size: 9px;
+  padding: 2px 7px;
+  border: 0.5px solid var(--border-subtle);
+  border-radius: 10px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cmdp-tab.active {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.cmdp-results {
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.cmdp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.cmdp-row.selected {
+  background: var(--bg-tertiary);
+}
+
+.cmdp-row.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.cmdp-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.cmdp-icon.ic-b { background: var(--blue-bg); color: var(--blue); }
+.cmdp-icon.ic-g { background: var(--green-bg); color: var(--green); }
+.cmdp-icon.ic-r { background: var(--red-bg); color: var(--red); }
+.cmdp-icon.ic-a { background: var(--amber-bg); color: var(--amber); }
+.cmdp-icon.ic-p { background: var(--purple-bg); color: var(--purple); }
+.cmdp-icon.ic-n { background: var(--bg-tertiary); color: var(--text-secondary); }
+
+.cmdp-row-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cmdp-row-label {
+  font-size: 11px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmdp-row.disabled .cmdp-row-label {
+  color: var(--text-secondary);
+}
+
+.cmdp-match {
+  color: var(--blue);
+}
+
+.cmdp-row-desc {
+  font-size: 9px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmdp-shortcut {
+  font-size: 9px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cmdp-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 /* `<select>` needs its native OS/WebView chrome reset — without `appearance: none` the closed
    box renders with the platform's own (light) widget background regardless of `background`
    above (seen on WebKitGTK/Linux); a CSS-drawn caret replaces the native dropdown arrow. */

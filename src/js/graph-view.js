@@ -4,7 +4,7 @@
 // wiring and its cherry-pick/revert/branch-from-here actions. Deliberately does NOT wire the
 // "rebase" toolbar button (that's item 10) — still visual-only here.
 
-import { openGraph, getGraphRows, getWorkingTreeStatus } from "./app.js";
+import { openGraph, getGraphRows, getWorkingTreeStatus, getCommitIndex } from "./app.js";
 import { createCommitRow, laneColumnWidth } from "../components/commit-row.js";
 import { createCommitOverlay } from "../components/commit-overlay.js";
 import { openCreateBranchDialog } from "./create-branch-dialog.js";
@@ -460,5 +460,24 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
     reloadFiltered();
   });
 
+  // Lets callers outside this module (the command palette's commit search, via
+  // `index-page.js`) jump straight to a result instead of reloading the whole page just to
+  // re-show the graph it's already showing. `getCommitIndex` looks up the row index in the
+  // same server-side cache `loadWindow` already slices, so this is a real jump-to-row, not a
+  // filter-and-hope.
+  async function goToCommit(sha) {
+    const index = await getCommitIndex(repoPath, sha).catch(() => null);
+    if (index == null) {
+      showToast({ variant: "danger", message: "That commit isn't in the currently-loaded graph." });
+      return;
+    }
+    selectedIndex = index;
+    body.scrollTop = Math.max(0, index * ROW_HEIGHT - body.clientHeight / 2);
+    firstIndex = Math.max(0, Math.floor(body.scrollTop / ROW_HEIGHT) - OVERSCAN);
+    await loadWindow(firstIndex);
+    overlay.open(sha, repoPath);
+  }
+
   await loadWindow(0);
+  return { goToCommit };
 }

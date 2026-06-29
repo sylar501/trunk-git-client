@@ -17,6 +17,7 @@ import { renderSidebar } from "./sidebar.js";
 import { openCloneDialog } from "./clone-dialog.js";
 import { openRepoPickerDialog } from "./repo-picker-dialog.js";
 import { mountGraph } from "./graph-view.js";
+import { mountCommandPalette } from "./command-registry.js";
 import { showToast } from "../components/toast.js";
 import { attachResizeHandle } from "../components/resize-handle.js";
 
@@ -27,6 +28,21 @@ const SIDEBAR_MAX_WIDTH = 360;
 // panel updates this in place so a later re-render (e.g. switching repos) keeps using the
 // latest known width, not whatever was loaded at startup.
 let uiSettings = { sidebar_width: 156, commit_overlay_width: 264 };
+
+// Latest `getAppState()` result, refreshed by every `refresh()` call — read by the command
+// palette's `getCtx()` (see `init()`) so ⌘K always reflects the current repo/mode without
+// needing its own re-mount on every refresh (PRD §10's "rebuilt on repo/workspace switch").
+let latestAppState = null;
+
+// The currently-mounted graph's controller (see `graph-view.js`'s `mountGraph` return value) —
+// lets the command palette's commit search jump straight to a result instead of reloading the
+// page just to re-show the graph it's already showing. `null` whenever the canvas isn't
+// actually hosting a graph (empty workspace, no active repo).
+let currentGraphController = null;
+
+// Set by the command palette's commit rows on `staging.html`/`resolve.html` (no graph mounted
+// there to jump within) before navigating here — consumed once, right after the graph mounts.
+const GOTO_COMMIT_KEY = "trunk-goto-commit";
 
 function activeRepoPath(appState) {
   return appState.mode === "repository" ? appState.repo_path : appState.active_repo;
@@ -50,6 +66,7 @@ function setupSidebarResize() {
 }
 
 async function renderGraphArea(canvas, appState) {
+  currentGraphController = null;
   if (appState.mode === "workspace" && appState.repos.length === 0) {
     canvas.innerHTML = `
       <div class="empty-state-card">
@@ -77,7 +94,7 @@ async function renderGraphArea(canvas, appState) {
   // sidebar's branch list refreshed — `refresh()` already does both together, and the cost is
   // dominated by the graph walk regardless, so there's no value in a narrower, action-specific
   // refresh here.
-  await mountGraph(canvas, repoPath, {
+  currentGraphController = await mountGraph(canvas, repoPath, {
     onMutated: () => refresh(),
     overlayWidth: uiSettings.commit_overlay_width,
     onOverlayResize: (width) => {
@@ -86,18 +103,36 @@ async function renderGraphArea(canvas, appState) {
     },
     conflicted: appState.conflict_resolution_in_progress,
   });
+  consumePendingGotoCommit();
+}
+
+/** Picks up a commit jump requested from a graph-less page (staging/resolve) right after the
+ * graph that can actually honour it mounts — see `command-registry.js`'s commit rows. */
+function consumePendingGotoCommit() {
+  const sha = sessionStorage.getItem(GOTO_COMMIT_KEY);
+  if (!sha) return;
+  sessionStorage.removeItem(GOTO_COMMIT_KEY);
+  currentGraphController?.goToCommit(sha);
 }
 
 async function refresh() {
   const appState = await getAppState();
+  latestAppState = appState;
   await renderSidebar(document.getElementById("sidebar"), appState, {
     onAddExisting: handleAddExisting,
     onCloneNew: handleCloneNew,
-    onSwitched: (fresh) => renderGraphArea(document.getElementById("graph-canvas"), fresh),
+    onSwitched: (fresh) => {
+      latestAppState = fresh;
+      return renderGraphArea(document.getElementById("graph-canvas"), fresh);
+    },
     onBranchChanged: () => refresh(),
   });
   await renderGraphArea(document.getElementById("graph-canvas"), appState);
   return appState;
+}
+
+function activeRepoPathOrNull() {
+  return latestAppState ? activeRepoPath(latestAppState) : null;
 }
 
 async function handleAddExisting() {
@@ -146,6 +181,16 @@ async function init() {
   setupSidebarResize();
   await refresh();
   await setupDragDrop().catch(() => {});
+  mountCommandPalette(() => ({
+    repoPath: activeRepoPathOrNull(),
+    appState: latestAppState,
+    onMutated: refresh,
+    onAddExisting: handleAddExisting,
+    onCloneNew: handleCloneNew,
+    goToStaging: () => (window.location.href = "staging.html"),
+    goToHistory: () => (window.location.href = "index.html"),
+    goToCommit: (sha) => currentGraphController?.goToCommit(sha),
+  }));
 }
 
 init();

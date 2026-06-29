@@ -26,6 +26,10 @@ export async function createWorkspace(name, directory, initialRepos) {
   return invoke("create_workspace", { name, directory, initialRepos });
 }
 
+export async function promoteToWorkspace(name, directory) {
+  return invoke("promote_to_workspace", { name, directory });
+}
+
 export async function cloneRepository(url, destination, workspaceAction) {
   return invoke("clone_repository", { url, destination, workspaceAction });
 }
@@ -69,6 +73,10 @@ export async function openGraph(repoPath) {
 
 export async function getGraphRows(repoPath, start, count, filter) {
   return invoke("get_graph_rows", { repoPath, start, count, filter });
+}
+
+export async function getCommitIndex(repoPath, sha) {
+  return invoke("get_commit_index", { repoPath, sha });
 }
 
 export async function listBranches(repoPath) {

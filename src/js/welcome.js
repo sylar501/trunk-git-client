@@ -2,19 +2,12 @@
 // painting any UI, then wires the two primary buttons, the recent list, the nested-repo
 // choice dialog, and the create-empty-workspace prompt.
 
-import {
-  openRepository,
-  openWorkspace,
-  listRecent,
-  removeRecent,
-  detectNestedRepos,
-  createWorkspace,
-  pickFolder,
-} from "./app.js";
+import { openRepository, openWorkspace, listRecent, removeRecent, detectNestedRepos, pickFolder } from "./app.js";
 import { openDialog } from "../components/dialog.js";
 import { showToast } from "../components/toast.js";
 import { openContextMenu } from "../components/context-menu.js";
 import { openCloneDialog } from "./clone-dialog.js";
+import { promptWorkspaceDetails } from "./workspace-prompt.js";
 
 function goToGraph() {
   window.location.href = "index.html";
@@ -42,50 +35,6 @@ async function openRecentEntry(entry) {
     await openWorkspace(entry.path);
   }
   goToGraph();
-}
-
-/** Small name+directory prompt, shared by "Create empty workspace" and "Open as workspace". */
-function promptWorkspaceDetails({ title, initialRepos }) {
-  return new Promise((resolve) => {
-    const dlg = openDialog({
-      icon: "+",
-      iconVariant: "purple",
-      title,
-      bodyHtml: `
-        <div class="df">
-          <div class="lbl">Workspace name</div>
-          <input class="inp" id="ws-name" placeholder="my-workspace">
-        </div>
-        <div class="df">
-          <div class="lbl">Directory</div>
-          <div class="field-row">
-            <input class="inp" id="ws-dir">
-            <div class="btn btn-neutral" id="ws-dir-browse">Browse…</div>
-          </div>
-        </div>
-      `,
-      footerHtml: `
-        <div class="btn btn-neutral" id="ws-cancel">Cancel</div>
-        <div class="btn btn-green" id="ws-create">Create workspace</div>
-      `,
-      size: "small",
-    });
-    const nameInput = dlg.bodyEl.querySelector("#ws-name");
-    const dirInput = dlg.bodyEl.querySelector("#ws-dir");
-    dlg.bodyEl.querySelector("#ws-dir-browse").addEventListener("click", async () => {
-      const folder = await pickFolder();
-      if (folder) dirInput.value = folder;
-    });
-    dlg.footerEl.querySelector("#ws-cancel").addEventListener("click", () => dlg.close());
-    dlg.footerEl.querySelector("#ws-create").addEventListener("click", async () => {
-      const name = nameInput.value.trim();
-      const directory = dirInput.value.trim();
-      if (!name || !directory) return;
-      const result = await createWorkspace(name, directory, initialRepos);
-      dlg.close();
-      resolve(result);
-    });
-  });
 }
 
 function showNestedRepoChoice(rootPath, nested) {

@@ -17,6 +17,7 @@ import { renderSidebar } from "./sidebar.js";
 import { openCloneDialog } from "./clone-dialog.js";
 import { openRepoPickerDialog } from "./repo-picker-dialog.js";
 import { mountStaging } from "./staging-view.js";
+import { mountCommandPalette } from "./command-registry.js";
 import { showToast } from "../components/toast.js";
 import { attachResizeHandle } from "../components/resize-handle.js";
 
@@ -24,6 +25,10 @@ const SIDEBAR_MIN_WIDTH = 120;
 const SIDEBAR_MAX_WIDTH = 360;
 
 let uiSettings = { sidebar_width: 156, staging_files_width: 196 };
+
+// See index-page.js's identical field for why the command palette reads this instead of
+// taking a one-shot snapshot.
+let latestAppState = null;
 
 function activeRepoPath(appState) {
   return appState.mode === "repository" ? appState.repo_path : appState.active_repo;
@@ -74,6 +79,7 @@ async function handleCloneNew() {
 
 async function refreshSidebar() {
   const appState = await getAppState();
+  latestAppState = appState;
   await renderSidebar(document.getElementById("sidebar"), appState, {
     onAddExisting: handleAddExisting,
     onCloneNew: handleCloneNew,
@@ -102,6 +108,16 @@ async function init() {
       saveSettings({ stagingFilesWidth: width });
     },
   });
+
+  mountCommandPalette(() => ({
+    repoPath: activeRepoPath(latestAppState || appState),
+    appState: latestAppState || appState,
+    onMutated: refreshSidebar,
+    onAddExisting: handleAddExisting,
+    onCloneNew: handleCloneNew,
+    goToStaging: () => (window.location.href = "staging.html"),
+    goToHistory: exitToGraph,
+  }));
 }
 
 init();
