@@ -2074,9 +2074,10 @@ select.inp option {
   width: max-content;
 }
 
-.rb-badge-green { background: var(--green-bg); color: var(--green); }
-.rb-badge-amber { background: var(--amber-bg); color: var(--amber); }
-.rb-badge-purple { background: var(--purple-bg); color: var(--purple); }
+.rb-badge-green   { background: var(--green-bg);  color: var(--green); }
+.rb-badge-amber   { background: var(--amber-bg);  color: var(--amber); }
+.rb-badge-purple  { background: var(--purple-bg); color: var(--purple); }
+.rb-badge-neutral { background: var(--bg-tertiary); color: var(--text-secondary); }
 
 .rb-footer {
   display: flex;

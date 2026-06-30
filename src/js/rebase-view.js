@@ -161,7 +161,14 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
     previewEl.innerHTML = `
       <div class="rb-preview-header">After rebase</div>
       <div class="rb-preview-list">
-        ${rows.map((r) => previewRowHtml(r)).join("")}
+        ${[...rows].reverse().map((r) => previewRowHtml(r)).join("")}
+        <div class="rb-prev-row rb-prev-onto">
+          <div class="rb-prev-dot" style="background:var(--border-default)"></div>
+          <div class="rb-prev-info" style="flex-direction:row;align-items:center;gap:6px;">
+            <span class="rb-prev-badge rb-badge-neutral" style="font-family:monospace;flex-shrink:0;">${plan.onto_short_sha}</span>
+            <span class="rb-prev-msg" style="color:var(--text-secondary);">${plan.onto_summary}</span>
+          </div>
+        </div>
       </div>
     `;
   }

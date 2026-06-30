@@ -47,6 +47,8 @@ pub struct RebaseStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebasePlan {
     pub onto_sha: String,
+    pub onto_short_sha: String,
+    pub onto_summary: String,
     pub onto_display_name: String,
     pub branch_name: String,
     pub steps: Vec<RebaseStep>,
@@ -108,6 +110,8 @@ pub fn build_plan(repo: &Repository, onto_ref: &str) -> Result<RebasePlan, Strin
     let onto_object = repo.revparse_single(onto_ref).map_err(|e| e.to_string())?;
     let onto_commit = onto_object.peel_to_commit().map_err(|e| e.to_string())?;
     let onto_oid = onto_commit.id();
+    let onto_short_sha = onto_oid.to_string()[..7].to_string();
+    let onto_summary = onto_commit.summary().unwrap_or("").to_string();
 
     let summaries = commit_summaries_between(repo, head_oid, Some(onto_oid))?;
     let mut steps = Vec::with_capacity(summaries.len());
@@ -132,6 +136,8 @@ pub fn build_plan(repo: &Repository, onto_ref: &str) -> Result<RebasePlan, Strin
 
     Ok(RebasePlan {
         onto_sha: onto_oid.to_string(),
+        onto_short_sha,
+        onto_summary,
         onto_display_name: onto_ref.to_string(),
         branch_name,
         steps,
@@ -493,6 +499,8 @@ mod tests {
     fn plan_with(onto: Oid, branch: &str, steps: Vec<RebaseStep>) -> RebasePlan {
         RebasePlan {
             onto_sha: onto.to_string(),
+            onto_short_sha: onto.to_string()[..7].to_string(),
+            onto_summary: String::new(),
             onto_display_name: onto.to_string(),
             branch_name: branch.to_string(),
             steps,
