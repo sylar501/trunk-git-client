@@ -38,9 +38,11 @@ export function computePreviewRows(steps) {
           accumulated.push({ kind: "pick", message: step.summary });
         } else {
           // Replace previous with a combined entry showing absorbed count.
+          // Preserve baseKind so the renderer can still show reword/edit badges.
           const count = (prev.absorbedCount || 0) + 1;
           accumulated[accumulated.length - 1] = {
             kind: "squash-target",
+            baseKind: prev.baseKind || prev.kind,
             message: prev.message,
             absorbedCount: count,
             absorbedMessages: [...(prev.absorbedMessages || []), step.summary],
@@ -56,6 +58,7 @@ export function computePreviewRows(steps) {
           const count = (prev.absorbedCount || 0) + 1;
           accumulated[accumulated.length - 1] = {
             kind: "squash-target",
+            baseKind: prev.baseKind || prev.kind,
             message: prev.message,
             absorbedCount: count,
             absorbedMessages: [...(prev.absorbedMessages || [])],

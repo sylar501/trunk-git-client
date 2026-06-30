@@ -175,12 +175,19 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
 
   function previewRowHtml(r) {
     if (r.kind === "squash-target") {
+      const basedOnReword = r.baseKind === "reword";
+      const basedOnEdit   = r.baseKind === "edit";
+      const dotColor = basedOnReword ? "var(--green)" : basedOnEdit ? "var(--purple)" : "var(--amber)";
       return `
         <div class="rb-prev-row">
-          <div class="rb-prev-dot" style="background:var(--amber)"></div>
+          <div class="rb-prev-dot" style="background:${dotColor}"></div>
           <div class="rb-prev-info">
-            <span class="rb-prev-badge rb-badge-amber">squash ×${r.absorbedCount}</span>
-            <span class="rb-prev-msg">${r.message}</span>
+            <div style="display:flex;gap:4px;align-items:center;">
+              ${basedOnReword ? `<span class="rb-prev-badge rb-badge-green">reword</span>` : ""}
+              ${basedOnEdit   ? `<span class="rb-prev-badge rb-badge-purple">edit</span>` : ""}
+              <span class="rb-prev-badge rb-badge-amber">squash ×${r.absorbedCount}</span>
+            </div>
+            <span class="rb-prev-msg${basedOnReword ? " rb-prev-reworded" : ""}">${r.message}</span>
           </div>
         </div>
       `;
