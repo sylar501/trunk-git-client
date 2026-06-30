@@ -38,8 +38,14 @@ pub struct AppState {
     /// session, or a manual `git merge` in a terminal — is picked up the moment that repo is
     /// opened, without scanning every repo in a large workspace on every render.
     pub conflicted_repos: HashSet<String>,
-    /// Destructive-switch gating (PRD §15.4.4) — always false until interactive rebase (item 10)
-    /// exists and starts setting this.
+    /// Destructive-switch gating (PRD §15.4.4, SPEC.md item 10/PRD §16). A single global flag,
+    /// not per-repo like `conflicted_repos` above — only the currently active repo can ever be
+    /// mid-rebase, since `switch_active_repository` hard-blocks leaving it while this is `true`.
+    /// Set/cleared by `begin_rebase_execution`/`resume_rebase_execution`/
+    /// `continue_rebase_after_edit`/`abort_interactive_rebase` and the rebase-aware branch of
+    /// `finish_conflict_resolution`, and resynced from disk (`Repo::has_interactive_rebase_session`)
+    /// by `resync_conflict_state`/`open_workspace` whenever a repo becomes active, the same
+    /// restart-durability story `conflicted_repos` already has above.
     pub rebase_in_progress: bool,
 }
 

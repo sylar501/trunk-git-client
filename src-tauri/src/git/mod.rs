@@ -11,6 +11,9 @@ use git2::{BranchType, Oid, Repository, Sort};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+mod rebase_plan;
+pub use rebase_plan::{RebasePlan, RebaseSidecar, StepOutcome as RebaseStepOutcome};
+
 pub struct Repo {
     inner: Repository,
 }
@@ -69,7 +72,15 @@ impl Repo {
         finish_conflict_resolution(&self.inner, files)
     }
 
+    /// A Trunk interactive rebase's conflicts are resolved inline through this exact same
+    /// conflict-resolver UI/commands (see `rebase_plan`'s doc comment), so its Abort button also
+    /// routes here — delegate to the rebase-aware abort instead of the generic
+    /// `abort_in_progress_operation` (which resets to *current* HEAD, wrong once HEAD has been
+    /// deliberately detached onto the rebase's own chain; see `rebase_plan::abort_interactive_rebase`).
     pub fn abort_conflict_resolution(&self) -> Result<(), String> {
+        if rebase_plan::has_interactive_rebase_session(&self.inner) {
+            return rebase_plan::abort_interactive_rebase(&self.inner);
+        }
         abort_in_progress_operation(&self.inner).map_err(|e| e.to_string())
     }
 
@@ -204,6 +215,37 @@ impl Repo {
         strategy: PullStrategy,
     ) -> Result<ConflictableOutcome, String> {
         pull_branch(&self.inner, on_progress, local_branch, remote_name, remote_branch, strategy)
+    }
+
+    // --- Interactive rebase (SPEC.md item 10, PRD §16) --------------------------------------
+
+    pub fn build_rebase_plan(&self, onto_ref: &str) -> Result<RebasePlan, String> {
+        rebase_plan::build_plan(&self.inner, onto_ref)
+    }
+
+    pub fn begin_interactive_rebase(&self, plan: RebasePlan) -> Result<RebaseStepOutcome, String> {
+        rebase_plan::begin_interactive_rebase(&self.inner, plan)
+    }
+
+    pub fn resume_interactive_rebase(&self) -> Result<RebaseStepOutcome, String> {
+        rebase_plan::resume_interactive_rebase(&self.inner)
+    }
+
+    pub fn continue_rebase_after_edit(&self) -> Result<RebaseStepOutcome, String> {
+        let sidecar = rebase_plan::read_sidecar(&self.inner).ok_or_else(|| "No paused rebase to continue.".to_string())?;
+        rebase_plan::resume_after_edit(&self.inner, sidecar)
+    }
+
+    pub fn abort_interactive_rebase(&self) -> Result<(), String> {
+        rebase_plan::abort_interactive_rebase(&self.inner)
+    }
+
+    pub fn interactive_rebase_session(&self) -> Option<RebaseSidecar> {
+        rebase_plan::read_sidecar(&self.inner)
+    }
+
+    pub fn has_interactive_rebase_session(&self) -> bool {
+        rebase_plan::has_interactive_rebase_session(&self.inner)
     }
 }
 
@@ -995,7 +1037,15 @@ pub struct ResolvedFile {
     pub content: String,
 }
 
-fn conflict_operation_name(state: git2::RepositoryState) -> &'static str {
+/// `sidecar` overrides the generic per-`repo.state()` name with "rebase (step N of M)" when this
+/// conflict belongs to a Trunk interactive rebase (mod `rebase_plan`) — every interactive-rebase
+/// step is itself a plain `CherryPick`-state conflict under the hood (see that module's doc
+/// comment), so without this the resolver's banner would misleadingly read "cherry-pick".
+fn conflict_operation_name(state: git2::RepositoryState, sidecar: Option<&RebaseSidecar>) -> String {
+    if let Some(sidecar) = sidecar {
+        let done = sidecar.total_steps.saturating_sub(sidecar.remaining_steps.len());
+        return format!("rebase (step {} of {})", done + 1, sidecar.total_steps);
+    }
     use git2::RepositoryState::*;
     match state {
         Merge => "merge",
@@ -1004,6 +1054,7 @@ fn conflict_operation_name(state: git2::RepositoryState) -> &'static str {
         Rebase | RebaseInteractive | RebaseMerge => "rebase",
         _ => "operation",
     }
+    .to_string()
 }
 
 fn conflict_status(repo: &Repository) -> Result<Option<ConflictSession>, String> {
@@ -1011,7 +1062,8 @@ fn conflict_status(repo: &Repository) -> Result<Option<ConflictSession>, String>
     if state == git2::RepositoryState::Clean {
         return Ok(None);
     }
-    let operation = conflict_operation_name(state).to_string();
+    let sidecar = rebase_plan::read_sidecar(repo);
+    let operation = conflict_operation_name(state, sidecar.as_ref());
     let summary = repo.message().unwrap_or_default();
 
     let index = repo.index().map_err(|e| e.to_string())?;
@@ -1115,6 +1167,35 @@ fn finish_conflict_resolution(repo: &Repository, files: Vec<ResolvedFile>) -> Re
         let committer = repo.signature().map_err(|e| e.to_string())?;
         rebase.commit(None, &committer, None).map_err(|e| e.to_string())?;
         return drive_rebase_to_completion(repo, rebase);
+    }
+
+    // A Trunk interactive rebase step is itself a plain `CherryPick`-state conflict under the
+    // hood (SPEC.md item 10, PRD §16 — see `rebase_plan`'s doc comment for why git2's Rebase
+    // struct can't be used for reorder/squash/fixup/drop). A sidecar file's presence means this
+    // index belongs to one of those steps rather than a one-off cherry-pick — hand off to its
+    // own commit-construction logic (reword/squash/fixup semantics) and let it continue driving
+    // whatever steps remain, instead of falling into the generic single-commit path below.
+    if matches!(repo.state(), git2::RepositoryState::CherryPick | git2::RepositoryState::CherryPickSequence) {
+        if let Some(sidecar) = rebase_plan::read_sidecar(repo) {
+            let outcome = rebase_plan::resume_after_conflict_resolution(repo, sidecar)?;
+            return Ok(match outcome {
+                RebaseStepOutcome::Finished { final_sha } => ConflictableOutcome::Completed { sha: final_sha },
+                RebaseStepOutcome::Conflict { .. } => ConflictableOutcome::Conflict,
+                // From the resolver's point of view this step is done — no more conflict.
+                // `rebase.html`'s own state machine is what notices `paused_for_edit` and shows
+                // the amend UI, not the conflict resolver.
+                RebaseStepOutcome::PausedForEdit { .. } => {
+                    let head_sha = repo
+                        .head()
+                        .map_err(|e| e.to_string())?
+                        .peel_to_commit()
+                        .map_err(|e| e.to_string())?
+                        .id()
+                        .to_string();
+                    ConflictableOutcome::Completed { sha: head_sha }
+                }
+            });
+        }
     }
 
     let tree_oid = index.write_tree().map_err(|e| e.to_string())?;
@@ -2340,6 +2421,10 @@ pub struct CommitSummary {
 
 fn commit_summaries_between(repo: &Repository, from_oid: Oid, hide_oid: Option<Oid>) -> Result<Vec<CommitSummary>, String> {
     let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    // Newest-first, matching `build_graph`'s convention (TOPOLOGICAL | TIME with no REVERSE) —
+    // load-bearing for callers like `build_plan` that need a deterministic, git-rebase-i-style
+    // ordering, not just whatever order libgit2's default unsorted walk happens to produce.
+    walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME).map_err(|e| e.to_string())?;
     walk.push(from_oid).map_err(|e| e.to_string())?;
     if let Some(hide_oid) = hide_oid {
         walk.hide(hide_oid).map_err(|e| e.to_string())?;

@@ -13,6 +13,7 @@ import { openConflictableActionDialog } from "./conflictable-action-dialog.js";
 import { openPushDialog } from "./push-dialog.js";
 import { openFetchDialog } from "./fetch-dialog.js";
 import { openPullDialog } from "./pull-dialog.js";
+import { openRebaseTargetDialog } from "./rebase-target-dialog.js";
 import { showToast } from "../components/toast.js";
 import { attachResizeHandle } from "../components/resize-handle.js";
 
@@ -76,7 +77,7 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
           ? '<div class="btn btn-amber" id="g-stage">Resolve conflicts</div>'
           : '<div class="btn btn-green disabled" id="g-stage">Stage changes</div>'
       }
-      <div class="btn btn-neutral disabled" id="g-rebase">rebase</div>
+      <div class="btn btn-neutral${conflicted ? " disabled" : ""}" id="g-rebase">Rebase</div>
     </div>
     <div class="tb-filters" id="g-filters" hidden>
       <input class="inp" id="f-author" placeholder="author" />
@@ -201,6 +202,12 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
   canvas.querySelector("#g-push").addEventListener("click", () => openPushDialog({ repoPath, onMutated }), { signal });
   canvas.querySelector("#g-fetch").addEventListener("click", () => openFetchDialog({ repoPath, onMutated }), { signal });
   canvas.querySelector("#g-pull").addEventListener("click", () => openPullDialog({ repoPath, onMutated }), { signal });
+  const rebaseBtn = canvas.querySelector("#g-rebase");
+  if (!conflicted) {
+    rebaseBtn.addEventListener("click", () => {
+      if (!rebaseBtn.classList.contains("disabled")) openRebaseTargetDialog({ repoPath });
+    }, { signal });
+  }
 
   const stageBtn = canvas.querySelector("#g-stage");
   let hasPendingChanges = false;
@@ -263,6 +270,7 @@ export async function mountGraph(canvas, repoPath, { onMutated, overlayWidth: in
         hasPendingChanges = count > 0;
         stageBtn.textContent = count > 0 ? `Stage changes (${count})` : "Stage changes";
         stageBtn.classList.toggle("disabled", !hasPendingChanges);
+        rebaseBtn.classList.toggle("disabled", count > 0);
       })
       .catch(() => {
         hasPendingChanges = false;

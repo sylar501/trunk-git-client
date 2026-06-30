@@ -1601,7 +1601,6 @@ select.inp option {
 .rsv-banner-text {
   color: var(--amber);
   font-weight: 600;
-  text-transform: capitalize;
 }
 
 .rsv-banner-progress {
@@ -1706,6 +1705,13 @@ select.inp option {
 
 .cfh-line {
   white-space: pre-wrap;
+}
+
+.cfh-no-base {
+  padding: 6px 8px;
+  font-style: italic;
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 
 .cfh-ours {
@@ -1934,3 +1940,174 @@ select.inp option {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* === Interactive rebase (SPEC.md item 10, PRD §16) ========================================= */
+
+.rb-layout {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.rb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.rb-header-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.rb-branch-label {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--blue);
+  font-size: 12px;
+}
+
+.rb-onto-label {
+  color: var(--text-secondary);
+}
+
+.rb-count-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.rb-esc-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.rb-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.rb-list-col {
+  flex: 0 0 58%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.rb-preview-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+}
+
+.rb-preview-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.rb-preview-list {
+  padding: 8px 0;
+  flex: 1;
+}
+
+.rb-preview-empty {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+}
+
+.rb-prev-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 12px;
+}
+
+.rb-prev-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.rb-prev-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rb-prev-msg {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rb-prev-reworded {
+  font-style: italic;
+  color: var(--green);
+}
+
+.rb-prev-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  width: max-content;
+}
+
+.rb-badge-green { background: var(--green-bg); color: var(--green); }
+.rb-badge-amber { background: var(--amber-bg); color: var(--amber); }
+.rb-badge-purple { background: var(--purple-bg); color: var(--purple); }
+
+.rb-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.rb-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rb-executing {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.rb-exec-msg {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.rb-abort-btn {
+  flex-shrink: 0;
+}
+

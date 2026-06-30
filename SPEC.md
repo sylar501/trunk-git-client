@@ -334,7 +334,7 @@ rather than inventing a per-panel variant:
 - **Acceptance criteria**:
   - Header: branch/target/commit-count context + Esc-to-cancel hint. Footer: live plain-English
     summary (left), Cancel / Begin Rebase (right).
-  - Commit list (left, 58%, newest-first): draggable rows, action selectors (pick blue, reword
+  - Commit list (left, 58%, oldest-first matching `git rebase -i`): draggable rows, action selectors (pick blue, reword
     green, squash amber, fixup amber, edit purple, drop red) with row tinting; reword becomes an
     inline text input, no dialog.
   - Result preview (right, 42%, after-state only): pick = filled blue dot; reword = filled green

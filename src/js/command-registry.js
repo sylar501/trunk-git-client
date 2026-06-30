@@ -26,6 +26,7 @@ import { openSwitchBranchDialog } from "./switch-branch-dialog.js";
 import { openPushDialog } from "./push-dialog.js";
 import { openFetchDialog } from "./fetch-dialog.js";
 import { openPullDialog } from "./pull-dialog.js";
+import { openRebaseTargetDialog } from "./rebase-target-dialog.js";
 import { confirmDirtyTreeStrategy } from "./branch-dialog-shared.js";
 import { promptWorkspaceDetails } from "./workspace-prompt.js";
 import { showToast } from "../components/toast.js";
@@ -174,7 +175,17 @@ function staticCommands(ctx) {
       shortcutLabel: "⌘⇧P",
       run: () => openPullDialog({ repoPath, onMutated }),
     },
-    { id: "rebase", scope: "commands", iconVariant: "purple", icon: "↕", ...comingLater("Interactive rebase…") },
+    {
+      id: "rebase",
+      scope: "commands",
+      iconVariant: "purple",
+      icon: "↕",
+      label: "Interactive rebase…",
+      description: "Reorder, reword, squash, or drop commits",
+      shortcutLabel: "⌘⇧R",
+      disabled: !!appState?.conflict_resolution_in_progress || !!appState?.rebase_in_progress,
+      run: () => openRebaseTargetDialog({ repoPath }),
+    },
     { id: "stash", scope: "commands", iconVariant: "amber", icon: "▤", ...comingLater("Stash changes…") },
     { id: "pop-stash", scope: "commands", iconVariant: "green", icon: "▤", ...comingLater("Pop stash") },
     { id: "create-tag", scope: "commands", iconVariant: "purple", icon: "◆", ...comingLater("Create tag…") },

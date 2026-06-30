@@ -253,3 +253,29 @@ export async function renameBranch(repoPath, oldName, newName) {
 export async function deleteBranch(repoPath, name, force, alsoDeleteRemote) {
   return invoke("delete_branch", { repoPath, name, force, alsoDeleteRemote });
 }
+
+// --- Interactive rebase (SPEC.md item 10, PRD §16) ------------------------------------------
+
+export async function startInteractiveRebase(repoPath, ontoRef) {
+  return invoke("start_interactive_rebase", { repoPath, ontoRef });
+}
+
+export async function beginRebaseExecution(repoPath, plan) {
+  return invoke("begin_rebase_execution", { repoPath, plan });
+}
+
+export async function getRebaseSession(repoPath) {
+  return invoke("get_rebase_session", { repoPath });
+}
+
+export async function resumeRebaseExecution(repoPath) {
+  return invoke("resume_rebase_execution", { repoPath });
+}
+
+export async function continueRebaseAfterEdit(repoPath) {
+  return invoke("continue_rebase_after_edit", { repoPath });
+}
+
+export async function abortInteractiveRebase(repoPath) {
+  return invoke("abort_interactive_rebase", { repoPath });
+}

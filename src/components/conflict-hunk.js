@@ -37,11 +37,16 @@ export function createConflictHunk(segment, panels, opts) {
   theirsBlock.className = "cfh-block cfh-theirs";
 
   oursBlock.innerHTML = linesHtml(segment.ours);
-  baseBlock.innerHTML = linesHtml(segment.base);
   theirsBlock.innerHTML = linesHtml(segment.theirs);
   setLinesText(oursBlock, segment.ours);
-  setLinesText(baseBlock, segment.base);
   setLinesText(theirsBlock, segment.theirs);
+
+  if (segment.base.length === 0) {
+    baseBlock.innerHTML = `<div class="cfh-no-base">(file did not exist in base)</div>`;
+  } else {
+    baseBlock.innerHTML = linesHtml(segment.base);
+    setLinesText(baseBlock, segment.base);
+  }
 
   const actions = document.createElement("div");
   actions.className = "cfh-actions";

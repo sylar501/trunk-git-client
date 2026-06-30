@@ -16,21 +16,26 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// being viewed at a time (PRD §15).
 pub type GraphState = Mutex<Option<(String, git::GraphCache)>>;
 
-/// Resyncs `AppState.conflicted_repos` for one repo from disk (see that field's doc comment in
-/// `state.rs`) — called whenever a repo becomes active so a conflict left over from outside
-/// Trunk is picked up immediately. Best-effort: an unreadable repo just leaves the set
-/// unchanged rather than failing whatever command called this as a side effect. `Repo::open` +
-/// `has_conflict` is cheap (no graph walk), so this runs inline rather than via `spawn_blocking`,
-/// same as the other lightweight synchronous commands in this file (`switch_active_repository`,
+/// Resyncs `AppState.conflicted_repos`/`rebase_in_progress` for one repo from disk (see those
+/// fields' doc comments in `state.rs`) — called whenever a repo becomes active so a conflict (or
+/// an interactive rebase, SPEC.md item 10) left over from outside Trunk, or from a previous
+/// session that crashed/was force-quit, is picked up immediately. Best-effort: an unreadable
+/// repo just leaves both flags unchanged rather than failing whatever command called this as a
+/// side effect. `Repo::open` + `has_conflict`/`has_interactive_rebase_session` is cheap (no
+/// graph walk), so this runs inline rather than via `spawn_blocking`, same as the other
+/// lightweight synchronous commands in this file (`switch_active_repository`,
 /// `add_existing_repository`).
 fn resync_conflict_state(state: &Mutex<AppState>, repo_path: &str) {
-    let conflicted = git::Repo::open(repo_path).map(|r| r.has_conflict()).unwrap_or(false);
+    let Ok(repo) = git::Repo::open(repo_path) else { return };
+    let conflicted = repo.has_conflict();
+    let rebasing = repo.has_interactive_rebase_session();
     let mut s = state.lock().unwrap();
     if conflicted {
         s.conflicted_repos.insert(repo_path.to_string());
     } else {
         s.conflicted_repos.remove(repo_path);
     }
+    s.rebase_in_progress = rebasing;
 }
 
 #[tauri::command]
@@ -78,12 +83,19 @@ pub async fn open_workspace(
     // click into first. Best-effort per repo (an unreadable/stale path just reports `false`),
     // mirroring `resync_conflict_state`'s single-repo behaviour.
     let repo_paths: Vec<String> = session.repos.iter().map(|r| r.path.clone()).collect();
+    let active_repo = session.active_repo.clone();
     let conflict_results = tauri::async_runtime::spawn_blocking(move || {
         repo_paths
             .into_iter()
             .map(|p| {
-                let conflicted = git::Repo::open(&p).map(|r| r.has_conflict()).unwrap_or(false);
-                (p, conflicted)
+                let repo = git::Repo::open(&p).ok();
+                let conflicted = repo.as_ref().map(|r| r.has_conflict()).unwrap_or(false);
+                // `rebase_in_progress` is a single global flag (not per-repo, unlike
+                // `conflicted_repos`) — only the workspace's *active* repo's session matters,
+                // since only the active repo is ever shown/navigable.
+                let rebasing = active_repo.as_deref() == Some(p.as_str())
+                    && repo.as_ref().map(|r| r.has_interactive_rebase_session()).unwrap_or(false);
+                (p, conflicted, rebasing)
             })
             .collect::<Vec<_>>()
     })
@@ -91,11 +103,14 @@ pub async fn open_workspace(
     .map_err(|e| e.to_string())?;
     {
         let mut s = state.lock().unwrap();
-        for (p, conflicted) in conflict_results {
+        for (p, conflicted, rebasing) in conflict_results {
             if conflicted {
                 s.conflicted_repos.insert(p);
             } else {
                 s.conflicted_repos.remove(&p);
+            }
+            if rebasing {
+                s.rebase_in_progress = true;
             }
         }
     }
@@ -491,7 +506,11 @@ pub async fn get_conflict_file(
 
 /// Returns `ConflictableOutcome` rather than a bare sha: a resolved rebase step can hand back
 /// another `Conflict` (the next commit in the rebase also conflicts) instead of finishing, in
-/// which case `conflicted_repos` deliberately stays untouched below.
+/// which case `conflicted_repos` deliberately stays untouched below. A Trunk interactive rebase
+/// step that turns out to be `edit` also comes back as `Completed` (see `git/mod.rs`'s
+/// sidecar-aware `finish_conflict_resolution` branch) even though the rebase itself isn't done —
+/// `has_interactive_rebase_session` (sidecar presence) is what actually distinguishes "fully
+/// finished" from "paused for edit, sidecar still on disk" for `rebase_in_progress` below.
 #[tauri::command]
 pub async fn finish_conflict_resolution(
     state: State<'_, Mutex<AppState>>,
@@ -499,14 +518,19 @@ pub async fn finish_conflict_resolution(
     files: Vec<git::ResolvedFile>,
 ) -> Result<git::ConflictableOutcome, String> {
     let path_for_open = repo_path.clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let (outcome, still_rebasing) = tauri::async_runtime::spawn_blocking(move || {
         let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
-        repo.finish_conflict_resolution(files)
+        let outcome = repo.finish_conflict_resolution(files)?;
+        Ok::<_, String>((outcome, repo.has_interactive_rebase_session()))
     })
     .await
     .map_err(|e| e.to_string())??;
     if !matches!(outcome, git::ConflictableOutcome::Conflict) {
-        state.lock().unwrap().conflicted_repos.remove(&repo_path);
+        let mut s = state.lock().unwrap();
+        s.conflicted_repos.remove(&repo_path);
+        if !still_rebasing {
+            s.rebase_in_progress = false;
+        }
     }
     Ok(outcome)
 }
@@ -523,7 +547,143 @@ pub async fn abort_conflict_resolution(
     })
     .await
     .map_err(|e| e.to_string())??;
-    state.lock().unwrap().conflicted_repos.remove(&repo_path);
+    let mut s = state.lock().unwrap();
+    s.conflicted_repos.remove(&repo_path);
+    s.rebase_in_progress = false;
+    Ok(())
+}
+
+// --- Interactive rebase (PRD §16, SPEC.md item 10) ----------------------------------------
+
+/// Builds the initial plan (§16.1's header context + §16.2's commit list) from `onto_ref` — no
+/// git mutation. Same hard-block shape as `cherry_pick_commit`'s `guard_no_conflict_in_progress`
+/// plus an additional rebase-specific guard, since stacking a second rebase on top of one
+/// already in progress would corrupt both.
+#[tauri::command]
+pub async fn start_interactive_rebase(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    onto_ref: String,
+) -> Result<git::RebasePlan, String> {
+    guard_no_conflict_in_progress(&state, &repo_path)?;
+    if state.lock().unwrap().rebase_in_progress {
+        return Err("A rebase is already in progress.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.build_rebase_plan(&onto_ref)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Centralizes how every interactive-rebase execution entry point (`begin`/`resume`/
+/// `continue-after-edit`) updates `AppState` from a `StepOutcome`: `Finished` clears both
+/// `rebase_in_progress` and `conflicted_repos`; `Conflict` keeps `rebase_in_progress` true (the
+/// takeover stays open) and sets `conflicted_repos` so the existing switch-blocking guard and
+/// the inline resolver's banner both see consistent state; `PausedForEdit` keeps
+/// `rebase_in_progress` true and leaves `conflicted_repos` untouched (no conflict, just paused).
+fn apply_rebase_outcome_to_state(state: &Mutex<AppState>, repo_path: &str, outcome: &git::RebaseStepOutcome) {
+    let mut s = state.lock().unwrap();
+    match outcome {
+        git::RebaseStepOutcome::Finished { .. } => {
+            s.rebase_in_progress = false;
+            s.conflicted_repos.remove(repo_path);
+        }
+        git::RebaseStepOutcome::Conflict { .. } => {
+            s.rebase_in_progress = true;
+            s.conflicted_repos.insert(repo_path.to_string());
+        }
+        git::RebaseStepOutcome::PausedForEdit { .. } => {
+            s.rebase_in_progress = true;
+        }
+    }
+}
+
+/// Kicks off execution (§16.4's "Begin Rebase").
+#[tauri::command]
+pub async fn begin_rebase_execution(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+    plan: git::RebasePlan,
+) -> Result<git::RebaseStepOutcome, String> {
+    state.lock().unwrap().rebase_in_progress = true;
+    let path_for_open = repo_path.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.begin_interactive_rebase(plan)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    apply_rebase_outcome_to_state(&state, &repo_path, &outcome);
+    Ok(outcome)
+}
+
+/// Restart-resume (best-effort durability, see `rebase_plan`'s doc comment) — `rebase-page.js`
+/// calls this instead of `start_interactive_rebase`/`begin_rebase_execution` when
+/// `AppStateView.rebase_in_progress` is already `true` on load.
+#[tauri::command]
+pub async fn get_rebase_session(repo_path: String) -> Result<Option<git::RebaseSidecar>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&repo_path).map_err(|e| format!("not a git repository: {e}"))?;
+        Ok(repo.interactive_rebase_session())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn resume_rebase_execution(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+) -> Result<git::RebaseStepOutcome, String> {
+    let path_for_open = repo_path.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.resume_interactive_rebase()
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    apply_rebase_outcome_to_state(&state, &repo_path, &outcome);
+    Ok(outcome)
+}
+
+/// "Continue rebase" after an edit-pause amend/extra-commit (decision 1) — caller has already
+/// committed via the existing `commit_changes` command; this just resumes the remaining plan.
+#[tauri::command]
+pub async fn continue_rebase_after_edit(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+) -> Result<git::RebaseStepOutcome, String> {
+    let path_for_open = repo_path.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.continue_rebase_after_edit()
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    apply_rebase_outcome_to_state(&state, &repo_path, &outcome);
+    Ok(outcome)
+}
+
+/// Cancel/Abort before or during a rebase (§16.4). Cancel from the plain `editing` mode (no git
+/// ops have run yet) never reaches the backend at all — it's a pure frontend navigation — so
+/// this command only ever runs once execution has actually started.
+#[tauri::command]
+pub async fn abort_interactive_rebase(
+    state: State<'_, Mutex<AppState>>,
+    repo_path: String,
+) -> Result<(), String> {
+    let path_for_open = repo_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = Repo::open(&path_for_open).map_err(|e| format!("not a git repository: {e}"))?;
+        repo.abort_interactive_rebase()
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let mut s = state.lock().unwrap();
+    s.rebase_in_progress = false;
+    s.conflicted_repos.remove(&repo_path);
     Ok(())
 }
 

@@ -165,7 +165,8 @@ export async function mountConflictResolver(root, repoPath, { onDone, mergedHeig
       onDone?.();
       return false;
     }
-    bannerTextEl.textContent = `${session.operation} in progress`;
+    const op = session.operation;
+    bannerTextEl.textContent = `${op.charAt(0).toUpperCase() + op.slice(1)} in progress`;
     for (const path of session.files) {
       if (!fileStates.has(path)) fileStates.set(path, newFileState());
     }
@@ -355,6 +356,7 @@ export async function mountConflictResolver(root, repoPath, { onDone, mergedHeig
       // rebase also conflicted, so reload the session and keep resolving rather than exiting.
       if (outcome.status === "conflict") {
         showToast({ variant: "warning", message: "Resolved — the next commit in the rebase also conflicts." });
+        fileStates.clear();
         selectedPath = null;
         const ok = await loadSession();
         if (!ok) return;

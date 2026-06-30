@@ -89,6 +89,16 @@ async function renderGraphArea(canvas, appState) {
     canvas.innerHTML = `<div class="empty-state-hint">No active repository.</div>`;
     return;
   }
+  // An in-progress interactive rebase (SPEC.md item 10) hard-blocks repo switching (backend
+  // enforced), so there's no sensible graph to show mid-rebase — route straight to the
+  // rebase takeover so the user can finish or abort. Unlike plain conflicts (which deliberately
+  // never auto-redirect — users can stay on the graph and manually click "Resolve"), a rebase
+  // session leaves the repo in a mid-cherry-pick detached-HEAD state where the graph would be
+  // misleading; auto-redirect is the right call.
+  if (appState.rebase_in_progress) {
+    window.location.href = "rebase.html";
+    return;
+  }
   // One shared refresh path for every commit-detail-overlay mutation (PRD §4.3, SPEC.md item
   // 4): cherry-pick/revert only need the graph re-walked, branch-from-here also needs the
   // sidebar's branch list refreshed — `refresh()` already does both together, and the cost is
