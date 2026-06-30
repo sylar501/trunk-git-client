@@ -43,11 +43,14 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
       onDone?.();
       return;
     }
-    renderExecuting(`Resuming rebase…`);
+    const resumeStep = Math.min(session.total_steps - session.remaining_steps.length + 1, session.total_steps);
+    renderExecuting(resumeStep, session.total_steps);
+    const stopPoller = startStepPoller(session.total_steps);
     const outcome = await resumeRebaseExecution(repoPath).catch((e) => {
       showToast({ variant: "danger", message: String(e) });
       return null;
     });
+    stopPoller();
     if (outcome) dispatch(outcome);
     return;
   }
@@ -170,7 +173,7 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
         ${[...rows].reverse().map((r) => previewRowHtml(r)).join("")}
         <div class="rb-prev-row rb-prev-onto">
           <div class="rb-prev-dot" style="background:var(--border-default)"></div>
-          <div class="rb-prev-info" style="flex-direction:row;align-items:center;gap:6px;">
+          <div class="rb-prev-info">
             <span class="rb-prev-badge rb-badge-neutral" style="font-family:monospace;flex-shrink:0;">${plan.onto_short_sha}</span>
             <span class="rb-prev-msg" style="color:var(--text-secondary);">${plan.onto_summary}</span>
           </div>
@@ -188,11 +191,9 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
         <div class="rb-prev-row">
           <div class="rb-prev-dot" style="background:${dotColor}"></div>
           <div class="rb-prev-info">
-            <div style="display:flex;gap:4px;align-items:center;">
-              ${basedOnReword ? `<span class="rb-prev-badge rb-badge-green">reword</span>` : ""}
-              ${basedOnEdit   ? `<span class="rb-prev-badge rb-badge-purple">edit</span>` : ""}
-              <span class="rb-prev-badge rb-badge-amber">squash ×${r.absorbedCount}</span>
-            </div>
+            ${basedOnReword ? `<span class="rb-prev-badge rb-badge-green">reword</span>` : ""}
+            ${basedOnEdit   ? `<span class="rb-prev-badge rb-badge-purple">edit</span>` : ""}
+            <span class="rb-prev-badge rb-badge-amber">squash ×${r.absorbedCount}</span>
             <span class="rb-prev-msg${basedOnReword ? " rb-prev-reworded" : ""}">${r.message}</span>
           </div>
         </div>
@@ -241,8 +242,8 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
     });
     const parts = [`${plan.steps.length} commit${plan.steps.length !== 1 ? "s" : ""}`];
     if (counts.reword) parts.push(`${counts.reword} reworded`);
-    if (counts.squash) parts.push(`${counts.squash} squashed`);
-    if (counts.fixup) parts.push(`${counts.fixup} fixed-up`);
+    const squashedTotal = (counts.squash || 0) + (counts.fixup || 0);
+    if (squashedTotal) parts.push(`${squashedTotal} squashed`);
     if (counts.edit) parts.push(`${counts.edit} pausing for edit`);
     if (counts.drop) parts.push(`${counts.drop} dropped`);
     summaryEl.textContent = parts.join(", ");
@@ -258,22 +259,43 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
     const beginBtn = root.querySelector("#rb-begin");
     if (beginBtn?.classList.contains("disabled")) return;
     editingKeyController?.abort();
-    renderExecuting("Starting rebase…");
+    const totalSteps = plan.steps.filter((s) => s.action !== "drop").length;
+    renderExecuting(1, totalSteps);
+    const stopPoller = startStepPoller(totalSteps);
     const outcome = await beginRebaseExecution(repoPath, plan).catch((e) => {
       showToast({ variant: "danger", message: String(e) });
       renderEditing();
       return null;
     });
+    stopPoller();
     if (outcome) dispatch(outcome);
   }
 
-  function renderExecuting(msg = "Rebasing…") {
+  function renderExecuting(current, total) {
+    const existing = root.querySelector(".rb-exec-msg");
+    if (existing) {
+      existing.textContent = `Rebasing (step ${current} of ${total})`;
+      return;
+    }
     root.innerHTML = `
       <div class="rb-executing">
         <div class="spinner" style="margin-bottom:12px;"></div>
-        <div class="rb-exec-msg">${msg}</div>
+        <div class="rb-exec-msg">Rebasing (step ${current} of ${total})</div>
       </div>
     `;
+  }
+
+  function startStepPoller(total) {
+    let stopped = false;
+    const id = setInterval(async () => {
+      if (stopped) return;
+      const session = await getRebaseSession(repoPath).catch(() => null);
+      if (stopped) return;
+      if (!session) return;
+      const current = Math.min(session.total_steps - session.remaining_steps.length + 1, session.total_steps);
+      renderExecuting(current, total);
+    }, 150);
+    return () => { stopped = true; clearInterval(id); };
   }
 
   // --- Outcome dispatch -----------------------------------------------------------------------
@@ -361,12 +383,14 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
       exitLabel: "Continue rebase",
       rebaseMode: true,
       onExit: async () => {
-        // "← history" in staging = "Continue rebase" here — resume the remaining plan.
-        renderExecuting("Continuing rebase…");
+        const nextStep = Math.min(sidecar.total_steps - sidecar.remaining_steps.length + 1, sidecar.total_steps);
+        renderExecuting(nextStep, sidecar.total_steps);
+        const stopPoller = startStepPoller(sidecar.total_steps);
         const outcome = await continueRebaseAfterEdit(repoPath).catch((e) => {
           showToast({ variant: "danger", message: String(e) });
           return null;
         });
+        stopPoller();
         if (outcome) dispatch(outcome);
       },
     });

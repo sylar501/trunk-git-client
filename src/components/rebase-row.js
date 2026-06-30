@@ -2,7 +2,7 @@
 // Each row has an action selector + message area; reword action replaces the message with
 // an inline textarea. Drag-and-drop (HTML5 native) reorders the plan array.
 
-const ACTIONS = ["pick", "reword", "squash", "fixup", "edit", "drop"];
+const ACTIONS = ["pick", "reword", "squash", "edit", "drop"];
 
 const ACTION_COLOR = {
   pick:   "var(--blue)",
@@ -51,8 +51,10 @@ export function renderRebaseRow(step, index, { onActionChange, onMessageChange, 
       color:${actionColor};padding:2px 4px;font-size:11px;cursor:pointer;min-width:72px;
     ">
       ${ACTIONS.map((a) => {
-        const invalid = index === 0 && (a === "squash" || a === "fixup");
-        return `<option value="${a}" ${a === step.action ? "selected" : ""} ${invalid ? "disabled" : ""}>${a}</option>`;
+        const invalid = index === 0 && a === "squash";
+        // treat legacy "fixup" steps as "squash" for selection highlight
+        const selected = a === step.action || (a === "squash" && step.action === "fixup");
+        return `<option value="${a}" ${selected ? "selected" : ""} ${invalid ? "disabled" : ""}>${a}</option>`;
       }).join("")}
     </select>
     <span class="rb-row-sha" style="font-family:monospace;font-size:11px;color:var(--text-secondary);flex-shrink:0;">${step.short_sha}</span>

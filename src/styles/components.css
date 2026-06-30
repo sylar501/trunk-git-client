@@ -2048,8 +2048,9 @@ select.inp option {
 
 .rb-prev-info {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -2071,7 +2072,8 @@ select.inp option {
   font-weight: 600;
   padding: 1px 5px;
   border-radius: 3px;
-  width: max-content;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .rb-badge-green   { background: var(--green-bg);  color: var(--green); }
