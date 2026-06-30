@@ -16,6 +16,7 @@ import {
 import { mountConflictResolver } from "./resolve-view.js";
 import { mountStaging } from "./staging-view.js";
 import { showToast } from "../components/toast.js";
+import { openDialog } from "../components/dialog.js";
 import { renderRebaseRow } from "../components/rebase-row.js";
 import { computePreviewRows } from "../components/rebase-preview-lane.js";
 
@@ -27,6 +28,9 @@ import { computePreviewRows } from "../components/rebase-preview-lane.js";
 export async function mountRebase(root, repoPath, { ontoRef = null, resume = false, onDone } = {}) {
   let controller = new AbortController();
   const { signal } = controller;
+  // Separate controller for the document-level Esc listener — aborted when leaving editing mode
+  // so it doesn't fire during execution, conflict, or paused-for-edit phases.
+  let editingKeyController = null;
 
   // plan: null until loaded; modified in place as user edits rows.
   let plan = null;
@@ -99,7 +103,9 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
 
     root.querySelector("#rb-cancel").addEventListener("click", () => onDone?.(), { signal });
     root.querySelector("#rb-begin").addEventListener("click", doBeginRebase, { signal });
-    document.addEventListener("keydown", onEditingKeydown, { signal });
+    editingKeyController?.abort();
+    editingKeyController = new AbortController();
+    document.addEventListener("keydown", onEditingKeydown, { signal: editingKeyController.signal });
   }
 
   function onEditingKeydown(e) {
@@ -251,6 +257,7 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
   async function doBeginRebase() {
     const beginBtn = root.querySelector("#rb-begin");
     if (beginBtn?.classList.contains("disabled")) return;
+    editingKeyController?.abort();
     renderExecuting("Starting rebase…");
     const outcome = await beginRebaseExecution(repoPath, plan).catch((e) => {
       showToast({ variant: "danger", message: String(e) });
@@ -311,29 +318,48 @@ export async function mountRebase(root, repoPath, { ontoRef = null, resume = fal
 
   function renderPausedForEdit(sidecar) {
     root.innerHTML = `
-      <div class="rb-paused-banner" style="display:flex;align-items:center;gap:10px;background:var(--amber-bg);border-bottom:1px solid var(--amber);padding:8px 16px;color:var(--amber);flex-shrink:0;">
-        <span style="flex:1;">
-          Paused for edit on <strong>${(sidecar.paused_for_edit || "").slice(0, 7)}</strong>
-          — amend or add commits below, then exit staging to continue.
-          ${
-            sidecar.remaining_steps?.length > 0
-              ? `<span style="opacity:.75;">${sidecar.remaining_steps.length} step${sidecar.remaining_steps.length !== 1 ? "s" : ""} remaining.</span>`
-              : `<span style="opacity:.75;">This is the last step.</span>`
-          }
-        </span>
-        <div class="btn btn-red rb-abort-btn" id="rb-abort-edit">Abort rebase</div>
+      <div class="rb-layout">
+        <div class="rb-paused-banner" style="display:flex;align-items:center;gap:10px;background:var(--amber-bg);border-bottom:1px solid var(--amber);padding:8px 16px;color:var(--amber);flex-shrink:0;">
+          <span style="flex:1;">
+            Paused for edit on <strong>${(sidecar.paused_for_edit || "").slice(0, 7)}</strong>
+            — amend or add commits below, then exit staging to continue.
+            ${
+              sidecar.remaining_steps?.length > 0
+                ? `<span style="opacity:.75;">${sidecar.remaining_steps.length} step${sidecar.remaining_steps.length !== 1 ? "s" : ""} remaining.</span>`
+                : `<span style="opacity:.75;">This is the last step.</span>`
+            }
+          </span>
+          <div class="btn btn-red rb-abort-btn" id="rb-abort-edit">Abort rebase</div>
+        </div>
+        <div class="rb-paused-staging" id="rb-paused-staging" style="flex:1;display:flex;overflow:hidden;"></div>
       </div>
-      <div class="rb-paused-staging" id="rb-paused-staging" style="flex:1;display:flex;overflow:hidden;"></div>
     `;
 
-    root.querySelector("#rb-abort-edit").addEventListener("click", async () => {
-      await abortInteractiveRebase(repoPath).catch(() => {});
-      showToast({ variant: "info", message: "Rebase aborted — working tree restored." });
-      onDone?.();
+    root.querySelector("#rb-abort-edit").addEventListener("click", () => {
+      const dlg = openDialog({
+        icon: "⚠",
+        iconVariant: "red",
+        title: "Abort rebase?",
+        subtitle: "All rebase progress will be lost and the working tree will be restored to its original state.",
+        size: "small",
+        footerHtml: `
+          <div class="btn btn-neutral" id="dlg-abort-cancel">Cancel</div>
+          <div class="btn btn-red" id="dlg-abort-confirm">Abort rebase</div>
+        `,
+      });
+      dlg.footerEl.querySelector("#dlg-abort-cancel").addEventListener("click", () => dlg.close());
+      dlg.footerEl.querySelector("#dlg-abort-confirm").addEventListener("click", async () => {
+        dlg.close();
+        await abortInteractiveRebase(repoPath).catch(() => {});
+        showToast({ variant: "info", message: "Rebase aborted — working tree restored." });
+        onDone?.();
+      });
     });
 
     const stagingRoot = root.querySelector("#rb-paused-staging");
     mountStaging(stagingRoot, repoPath, {
+      exitLabel: "Continue rebase",
+      rebaseMode: true,
       onExit: async () => {
         // "← history" in staging = "Continue rebase" here — resume the remaining plan.
         renderExecuting("Continuing rebase…");

@@ -33,8 +33,7 @@ export function createCommitPanel({ onCommit, onAmendToggle } = {}) {
       <span>Push after commit</span>
     </label>
     <div class="sc-meta">
-      <div class="sc-row"><span class="sc-lbl">Author</span><span class="sc-val"></span></div>
-      <div class="sc-row"><span class="sc-lbl">Branch</span><span class="sc-val"></span></div>
+      <div class="sc-row"><span class="sc-lbl">Author</span><span class="sc-val sc-author-val"></span></div>
     </div>
     <div class="btn btn-blue sc-commit">commit</div>
   `;
@@ -44,7 +43,7 @@ export function createCommitPanel({ onCommit, onAmendToggle } = {}) {
   const amendCheckbox = el.querySelector(".sc-amend");
   const signCheckbox = el.querySelector(".sc-sign");
   const signLabel = el.querySelectorAll(".sc-toggle")[1];
-  const [authorVal, branchVal] = el.querySelectorAll(".sc-val");
+  const authorVal = el.querySelector(".sc-author-val");
   const commitBtn = el.querySelector(".sc-commit");
 
   let currentBranch = "";

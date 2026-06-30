@@ -36,7 +36,7 @@ const FILES_MAX_WIDTH = 400;
  *     "Resizable panels" note).
  * }} opts
  */
-export async function mountStaging(root, repoPath, { onExit, filesWidth: initialFilesWidth, onFilesResize } = {}) {
+export async function mountStaging(root, repoPath, { onExit, filesWidth: initialFilesWidth, onFilesResize, exitLabel, rebaseMode } = {}) {
   // `mountStaging` can be remounted on the same root — abort the previous call's document-level
   // Escape listener before attaching a new one (same convention as graph-view.js's `mountGraph`).
   root._stgAbortController?.abort();
@@ -47,7 +47,7 @@ export async function mountStaging(root, repoPath, { onExit, filesWidth: initial
   root.innerHTML = `
     <div class="stg-layout">
       <div class="stg-topbar">
-        <div class="btn btn-neutral stg-exit">← history <span class="kbd-badge">Esc</span></div>
+        <div class="btn btn-neutral stg-exit">${exitLabel || "← history"}${rebaseMode ? "" : ' <span class="kbd-badge">Esc</span>'}</div>
       </div>
       <div class="stg-columns">
         <div class="stg-files-col"></div>
@@ -96,7 +96,7 @@ export async function mountStaging(root, repoPath, { onExit, filesWidth: initial
     commitPanel.setStats({ stagedCount, additions, deletions });
     commitPanel.setBranch(status.branch_name);
     commitPanel.setAuthor(status.author_name, status.author_email);
-    commitPanel.setCanAmend(status.can_amend);
+    commitPanel.setCanAmend(rebaseMode ? false : status.can_amend);
     commitPanel.setHasSigningKey(status.has_signing_key);
   }
 
@@ -264,7 +264,7 @@ export async function mountStaging(root, repoPath, { onExit, filesWidth: initial
   panelColEl.append(commitPanel.el);
 
   function exit() {
-    showToast({ variant: "info", message: "Returned to history." });
+    if (!rebaseMode) showToast({ variant: "info", message: "Returned to history." });
     onExit?.();
   }
 
@@ -273,19 +273,21 @@ export async function mountStaging(root, repoPath, { onExit, filesWidth: initial
   // Two-stage Escape (PRD §8): first Escape just defocuses an active input/textarea; second
   // (or first, when nothing's focused) exits to the graph. Local listener, not a central
   // registry — consistent with how every other view in this codebase wires its own Escape.
-  document.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.key !== "Escape") return;
-      const active = document.activeElement;
-      if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT")) {
-        active.blur();
-        return;
-      }
-      exit();
-    },
-    { signal }
-  );
+  if (!rebaseMode) {
+    document.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key !== "Escape") return;
+        const active = document.activeElement;
+        if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT")) {
+          active.blur();
+          return;
+        }
+        exit();
+      },
+      { signal }
+    );
+  }
 
   await refreshStatus();
   if (status.files.length > 0) {
